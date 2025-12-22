@@ -1,0 +1,12 @@
+{
+  "api_base_url": "http://your-backend-host:8000/api",
+  "api_token": "your_access_token_here",
+  "poll_interval": 1.0,
+  "log_level": "INFO",
+  "broker": "miniQMT",
+  "miniQMT": {
+    "xt_path": "C:\\国金QMT交易端模拟\\userdata_mini",
+    "account_id": "62666676"
+  },
+  "_comment": "Symbol format: Use standard format with exchange suffix (e.g., 000858.SZ, 600519.SH)"
+}

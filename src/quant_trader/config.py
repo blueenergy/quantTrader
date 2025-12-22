@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 
 @dataclass
@@ -14,12 +15,16 @@ class TraderConfig:
     api_token:   Bearer token for authentication
     poll_interval: Seconds between each polling cycle
     log_level:     Logging level string, e.g. "INFO", "DEBUG"
+    broker:        Broker type: "simulated" or "miniQMT"
+    miniQMT:       miniQMT broker config (if broker="miniQMT")
     """
 
     api_base_url: str
     api_token: str
     poll_interval: float = 1.0
     log_level: str = "INFO"
+    broker: str = "simulated"
+    miniQMT: Optional[Dict[str, Any]] = field(default_factory=dict)
 
 
 def load_config(config_path: str | None = None) -> TraderConfig:
@@ -62,10 +67,20 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         if isinstance(data.get("log_level"), str)
         else os.getenv("TRADER_LOG_LEVEL", "INFO")
     )
+    
+    broker = (
+        data.get("broker")
+        if isinstance(data.get("broker"), str)
+        else os.getenv("TRADER_BROKER", "simulated")
+    )
+    
+    miniQMT = data.get("miniQMT") if isinstance(data.get("miniQMT"), dict) else {}
 
     return TraderConfig(
         api_base_url=str(api_base_url).rstrip("/"),
         api_token=str(api_token),
         poll_interval=poll_interval,
         log_level=str(log_level),
+        broker=str(broker),
+        miniQMT=miniQMT,
     )

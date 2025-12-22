@@ -19,7 +19,7 @@ from pymongo import MongoClient
 
 def insert_test_signal(
     user_id: str = None,
-    symbol: str = "000858.SZ",
+    symbol: str = "000858.SZ",  # Standard format with exchange suffix
     action: str = "BUY",
     size: int = 100,
     price: float = 15.5,
@@ -33,7 +33,7 @@ def insert_test_signal(
         order_id of the inserted signal
     """
     mongo_uri = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-    mongo_db = os.getenv("MONGO_DB", "quant_finance")
+    mongo_db = os.getenv("MONGO_DB", "finance")
     
     if not user_id:
         print("Error: user_id is required")
@@ -96,7 +96,7 @@ def main():
     parser.add_argument(
         "--symbol",
         default="000858.SZ",
-        help="Stock symbol (default: 000858.SZ)",
+        help="Stock symbol with exchange suffix (default: 000858.SZ for Shenzhen, use .SH for Shanghai)",
     )
     parser.add_argument(
         "--action",
