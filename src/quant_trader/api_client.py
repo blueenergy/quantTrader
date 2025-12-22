@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Any, Dict, List
 
 import requests
 
 from .config import TraderConfig
+
+log = logging.getLogger("quantTrader")
 
 
 class TraderApiClient:
@@ -38,17 +41,33 @@ class TraderApiClient:
         Only signals belonging to the authenticated user will be returned
         (enforced by backend using the token).
         """
-        resp = requests.get(
-            f"{self.base_url}/trader/signals",
-            headers=self._headers(),
-            params={"limit": limit, "include_submitted": include_submitted},
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, dict):
-            return data.get("data", []) or []
-        return []
+        url = f"{self.base_url}/trader/signals"
+        params = {"limit": limit, "include_submitted": include_submitted}
+        
+        log.debug("GET %s with params=%s", url, params)
+        
+        try:
+            resp = requests.get(
+                url,
+                headers=self._headers(),
+                params=params,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            
+            if isinstance(data, dict):
+                signals = data.get("data", []) or []
+                log.debug("API returned %d signals", len(signals))
+                return signals
+            return []
+            
+        except requests.exceptions.HTTPError as e:
+            log.error("HTTP error fetching signals: %s - %s", e.response.status_code, e.response.text)
+            raise
+        except Exception as e:
+            log.error("Failed to fetch signals: %s", e)
+            raise
 
     def update_signal_status(self, order_id: str, payload: Dict[str, Any]) -> None:
         """Update status of a trade signal.

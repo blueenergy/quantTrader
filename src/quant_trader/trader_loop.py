@@ -34,12 +34,20 @@ class TraderLoop:
 
     def run_forever(self) -> None:
         log.info("quantTrader started. API=%s", self.cfg.api_base_url)
+        log.info("Poll interval: %.1f seconds", self.cfg.poll_interval)
+        log.info("Broker type: %s", type(self.broker).__name__)
+        
         try:
             while not self._stop:
                 try:
+                    log.debug("Polling for signals...")
                     signals = self.api.get_pending_signals(limit=50, include_submitted=False)
+                    
                     if signals:
                         log.info("Fetched %d pending signals", len(signals))
+                    else:
+                        log.debug("No pending signals found")
+                    
                     for sig in signals:
                         self._handle_signal(sig)
                 except Exception as e:  # noqa: BLE001
@@ -55,15 +63,26 @@ class TraderLoop:
     # ------------------------------------------------------------------
     def _handle_signal(self, sig: Dict[str, Any]) -> None:
         order_id = sig.get("order_id")
+        symbol = sig.get("symbol")
+        action = sig.get("action")
+        size = sig.get("size")
+        
+        log.info("Processing signal: order_id=%s, symbol=%s, action=%s, size=%s", 
+                 order_id, symbol, action, size)
+        
         if not order_id:
             log.warning("Skip signal without order_id: %s", sig)
             return
 
         try:
             # 1) send order to broker
+            log.debug("Placing order to broker: %s", order_id)
             broker_order_id = self.broker.place_order(sig)
+            log.info("Order placed successfully: order_id=%s, broker_order_id=%s", 
+                     order_id, broker_order_id)
 
             # 2) mark as submitted
+            log.debug("Updating signal status to 'submitted': %s", order_id)
             self.api.update_signal_status(order_id, {
                 "status": "submitted",
                 "qmt_order_id": broker_order_id,
@@ -91,16 +110,20 @@ class TraderLoop:
                 "strategy": sig.get("strategy"),
                 "strategy_name": sig.get("strategy_name", sig.get("strategy", "")),
             }
+            
+            log.debug("Reporting execution: %s", order_id)
             self.api.create_execution(execution)
-            log.info("Reported execution for order_id=%s", order_id)
+            log.info("✓ Execution reported successfully: order_id=%s, symbol=%s, action=%s", 
+                     order_id, symbol, action)
 
         except Exception as e:  # noqa: BLE001
-            log.error("Place order failed for %s: %s", order_id, e)
+            log.error("✗ Failed to process signal %s: %s", order_id, e, exc_info=True)
             # Minimal fallback: mark as retry_pending so backend/monitor can see it
             try:
                 self.api.update_signal_status(order_id, {
                     "status": "retry_pending",
                     "last_error": str(e),
                 })
+                log.info("Marked signal as retry_pending: %s", order_id)
             except Exception:  # noqa: BLE001
                 log.exception("Failed to update signal status for %s", order_id)
