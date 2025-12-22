@@ -53,7 +53,10 @@ class MiniQMTBroker(BrokerAdapter):
             from xtquant.xttype import StockAccount
             
             # Initialize trader
-            self.xt_trader = xttrader.XtQuantTrader(xt_path, session_id=int(time.time()))
+            session_id = int(time.time())
+            self.xt_trader = xttrader.XtQuantTrader(xt_path,session_id)
+
+            self.xt_trader.start()
             
             # Connect
             log.info("Connecting to miniQMT...")
@@ -101,7 +104,7 @@ class MiniQMTBroker(BrokerAdapter):
         Raises:
             RuntimeError: If order placement fails
         """
-        from xtquant.xttype import XtOrderType
+        from xtquant import xtconstant
         
         order_id = signal.get("order_id")
         symbol = signal.get("symbol")
@@ -115,15 +118,24 @@ class MiniQMTBroker(BrokerAdapter):
         # Map action to miniQMT side
         # 23 = Buy, 24 = Sell (XtQuantTrader constants)
         stock_code = symbol
-        order_type = XtOrderType.LIMIT_ORDER if price else XtOrderType.MARKET_ORDER
         
         if action.upper() == "BUY":
-            order_side = 23  # Buy
+            order_side = xtconstant.STOCK_BUY
         elif action.upper() == "SELL":
-            order_side = 24  # Sell
+            order_side = xtconstant.STOCK_SELL
         else:
             raise ValueError(f"Invalid action: {action}. Must be BUY or SELL")
-        
+
+        # order_type: 价格类型（市价 / 限价）
+        if price is None:
+            # 市价单
+            order_type = xtconstant.MARKET_PEER_PRICE_FIRST
+            price_val = 0.0
+        else:
+            # 限价单
+            order_type = xtconstant.FIX_PRICE
+            price_val = float(price)
+
         log.info(
             "Placing miniQMT order: order_id=%s, symbol=%s, action=%s, size=%s, price=%s",
             order_id, stock_code, action, size, price
@@ -133,14 +145,12 @@ class MiniQMTBroker(BrokerAdapter):
             # Place order via miniQMT
             # order_stock(account, stock_code, order_type, order_volume, price_type, price, strategy_name, order_remark)
             qmt_order_id = self.xt_trader.order_stock(
-                account=self.acc,
-                stock_code=stock_code,
-                order_type=order_type,
-                order_volume=int(size),
-                price_type=1 if price else 0,  # 1=limit, 0=market
-                price=float(price) if price else 0.0,
-                strategy_name="quantTrader",
-                order_remark=f"order_id:{order_id}"
+                self.acc,
+                stock_code,
+                order_side,
+                int(size),
+                order_type,
+                price_val
             )
             
             if qmt_order_id <= 0:
