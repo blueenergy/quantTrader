@@ -89,9 +89,28 @@ python -m quant_trader.cli
 
 You should see logs like:
 ```
+2025-12-22 12:34:56 [INFO] quantTrader: quantTrader logging initialized
+2025-12-22 12:34:56 [INFO] quantTrader: Log file: ~/.local/share/quantTrader/logs/quantTrader.log
+2025-12-22 12:34:56 [INFO] quantTrader: Log level: INFO
 2025-12-22 12:34:56 [INFO] quant_trader.trader_loop: quantTrader started. API=http://backend:8000/api
 2025-12-22 12:34:57 [INFO] quant_trader.trader_loop: Fetched 0 pending signals
 ```
+
+### Log Files
+
+quantTrader automatically writes logs to platform-appropriate directories:
+
+**Linux/macOS:**
+- `~/.local/share/quantTrader/logs/quantTrader.log`
+
+**Windows:**
+- `%LOCALAPPDATA%\quantTrader\logs\quantTrader.log`
+- Typically: `C:\Users\<YourName>\AppData\Local\quantTrader\logs\quantTrader.log`
+
+Log rotation:
+- Maximum file size: 10MB
+- Keeps 5 backup files (quantTrader.log.1, .2, etc.)
+- Total log storage: ~50MB max
 
 ## Configuration
 
@@ -336,6 +355,13 @@ def main(argv=None):
 - **Check**: Are you seeing "Reported execution for order_id=..." in logs?
 - **Check**: Backend `/api/trader/executions` endpoint is working (test with curl).
 - **Check**: Check backend logs for any insertion errors.
+
+### Cannot find log files
+
+- **Linux/macOS**: Logs are in `~/.local/share/quantTrader/logs/`
+- **Windows**: Logs are in `%LOCALAPPDATA%\quantTrader\logs\`
+- **Check**: Run `python -m quant_trader.cli --config config.json` and look for "Log file:" in console output
+- **Manual check**: The log directory is created automatically on first run
 
 ## Security Notes
 
