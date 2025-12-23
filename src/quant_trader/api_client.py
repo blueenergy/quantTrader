@@ -31,6 +31,38 @@ class TraderApiClient:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.token}",
         }
+    
+    def _request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
+        """Generic HTTP request helper.
+        
+        Args:
+            method: HTTP method (GET, POST, PUT, DELETE)
+            endpoint: API endpoint (e.g., '/trader/account/sync')
+            **kwargs: Additional arguments for requests (json, params, etc.)
+            
+        Returns:
+            Response JSON as dict
+        """
+        url = f"{self.base_url}{endpoint}"
+        
+        # Ensure headers are included
+        if 'headers' not in kwargs:
+            kwargs['headers'] = self._headers()
+        if 'timeout' not in kwargs:
+            kwargs['timeout'] = 10
+        
+        log.debug("%s %s", method, url)
+        
+        try:
+            resp = requests.request(method, url, **kwargs)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.exceptions.HTTPError as e:
+            log.error("HTTP error %s %s: %s - %s", method, endpoint, e.response.status_code, e.response.text)
+            raise
+        except Exception as e:
+            log.error("Request failed %s %s: %s", method, endpoint, e)
+            raise
 
     # ------------------------------------------------------------------
     # Public API methods
@@ -98,3 +130,48 @@ class TraderApiClient:
             timeout=10,
         )
         resp.raise_for_status()
+    
+    def sync_positions(self, positions: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Sync positions to backend.
+        
+        Args:
+            positions: List of position dicts
+            
+        Returns:
+            Response dict with success status
+        """
+        return self._request(
+            "POST",
+            "/trader/positions/sync",
+            json=positions
+        )
+    
+    def sync_account(self, account_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Sync account information to backend.
+        
+        Args:
+            account_data: Account data dict
+            
+        Returns:
+            Response dict with success status
+        """
+        return self._request(
+            "POST",
+            "/trader/account/sync",
+            json=account_data
+        )
+    
+    def store_position_snapshot(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
+        """Store daily position snapshot.
+        
+        Args:
+            snapshot: Snapshot data dict
+            
+        Returns:
+            Response dict with success status
+        """
+        return self._request(
+            "POST",
+            "/trader/positions/snapshot",
+            json=snapshot
+        )

@@ -336,9 +336,16 @@ class PositionManager:
             account_info: AccountInfo object to push
         """
         try:
-            # TODO: Implement API endpoint for account sync
-            # self.api.sync_account(account_info.to_dict())
-            log.debug("Account info ready for backend push")
+            # Push to backend API
+            account_dict = account_info.to_dict()
+            
+            response = self.api.sync_account(account_dict)
+            
+            if response.get("success"):
+                log.debug("Account info synced to backend")
+            else:
+                log.warning("Backend returned non-success for account sync")
+                
         except Exception as e:
             log.warning("Failed to push account to backend: %s", e)
     
@@ -458,10 +465,12 @@ class PositionManager:
             positions_data = [pos.to_dict() for pos in positions.values()]
             
             # Push to backend
-            # TODO: Implement API endpoint for position sync
-            # self.api.sync_positions(positions_data)
+            response = self.api.sync_positions(positions_data)
             
-            log.debug("Pushed %d positions to backend", len(positions_data))
+            if response.get("success"):
+                log.debug("Synced %d positions to backend", len(positions_data))
+            else:
+                log.warning("Backend returned non-success for position sync")
             
         except Exception as e:
             log.warning("Failed to push positions to backend: %s", e)
@@ -487,11 +496,13 @@ class PositionManager:
                 'total_pnl': sum(pos.unrealized_pnl for pos in positions.values())
             }
             
-            # Store snapshot
-            # TODO: Implement API endpoint for snapshot storage
-            # self.api.store_position_snapshot(snapshot)
+            # Store snapshot to backend
+            response = self.api.store_position_snapshot(snapshot)
             
-            log.debug("Stored position snapshot: %s", snapshot['date'])
+            if response.get("success"):
+                log.debug("Stored position snapshot: %s", snapshot['date'])
+            else:
+                log.warning("Backend returned non-success for snapshot storage")
             
         except Exception as e:
             log.warning("Failed to store position snapshot: %s", e)
