@@ -230,6 +230,78 @@ class MiniQMTBroker(BrokerAdapter):
             log.exception("Failed to query positions from miniQMT: %s", e)
             return {}
     
+    def query_account(self) -> Dict[str, Any]:
+        """Query account information from miniQMT.
+        
+        Returns:
+            Dict with account data:
+            {
+                "total_asset": 500000.0,      # Total account value
+                "cash": 120000.0,              # Available cash
+                "frozen_cash": 5000.0,         # Frozen in orders
+                "market_value": 380000.0,      # Position value
+                "available_cash": 115000.0,    # Available for trading
+                "buying_power": 115000.0,      # Max buying power
+                "account_type": "stock",       # Account type
+                "pnl": 12500.0,                # Today's P&L
+                "pnl_ratio": 0.025             # Today's P&L ratio
+            }
+        """
+        if not self.xt_trader or not self.acc:
+            log.warning("miniQMT not connected, cannot query account")
+            return {}
+        
+        try:
+            log.debug("Querying account info from miniQMT...")
+            
+            # Query account assets
+            # query_stock_asset(account) returns account asset object
+            asset = self.xt_trader.query_stock_asset(self.acc)
+            
+            if not asset:
+                log.warning("No account data returned from miniQMT")
+                return {}
+            
+            # Extract account information
+            result = {
+                # Core balance data
+                "total_asset": float(getattr(asset, 'total_asset', 0)),
+                "cash": float(getattr(asset, 'cash', 0)),
+                "frozen_cash": float(getattr(asset, 'frozen_cash', 0)),
+                "market_value": float(getattr(asset, 'market_value', 0)),
+                "available_cash": float(getattr(asset, 'cash', 0) - getattr(asset, 'frozen_cash', 0)),
+                
+                # Trading power
+                "buying_power": float(getattr(asset, 'cash', 0) - getattr(asset, 'frozen_cash', 0)),
+                
+                # Account info
+                "account_type": "stock",
+                "account_id": self.account_id,
+                
+                # P&L data (if available)
+                "pnl": float(getattr(asset, 'pnl', 0)),
+                "pnl_ratio": float(getattr(asset, 'pnl_ratio', 0)),
+                
+                # Additional fields
+                "fetch_balance": float(getattr(asset, 'fetch_balance', 0)),  # 可取金额
+                "interest": float(getattr(asset, 'interest', 0)),            # 利息
+                "asset_balance": float(getattr(asset, 'asset_balance', 0)),  # 资产余额
+            }
+            
+            log.info(
+                "✓ Account info: Total=¥%.2f, Cash=¥%.2f, Available=¥%.2f, Market Value=¥%.2f",
+                result['total_asset'],
+                result['cash'],
+                result['available_cash'],
+                result['market_value']
+            )
+            
+            return result
+            
+        except Exception as e:
+            log.exception("Failed to query account from miniQMT: %s", e)
+            return {}
+    
     def close(self) -> None:
         """
         Disconnect from miniQMT and cleanup resources.

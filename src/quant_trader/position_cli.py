@@ -22,6 +22,12 @@ Usage:
     
     # Export positions for AI analysis
     python -m quant_trader.position_cli --config config.json export positions.json
+    
+    # View account balance and cash
+    python -m quant_trader.position_cli --config config.json account
+    
+    # Get position size suggestion for new purchase
+    python -m quant_trader.position_cli --config config.json size 000858.SZ 42.50
 """
 
 import argparse
@@ -222,6 +228,68 @@ def cmd_export(manager: PositionManager, args):
     print(f"✓ Exported {len(positions)} positions to {output_file}")
 
 
+def cmd_account(manager: PositionManager, args):
+    """Show account balance and cash information."""
+    account = manager.sync_account(force=True)
+    
+    if not account:
+        print("No account information available")
+        return
+    
+    print("\n" + "=" * 70)
+    print("ACCOUNT INFORMATION")
+    print("=" * 70)
+    print(f"Account ID:       {account.account_id}")
+    print(f"Account Type:     {account.account_type}")
+    print()
+    print(f"Total Assets:     ¥{account.total_asset:,.2f}")
+    print(f"  Cash:           ¥{account.cash:,.2f}")
+    print(f"  Market Value:   ¥{account.market_value:,.2f}")
+    print()
+    print(f"Available Cash:   ¥{account.available_cash:,.2f}")
+    print(f"Frozen Cash:      ¥{account.frozen_cash:,.2f}")
+    print(f"Buying Power:     ¥{account.buying_power:,.2f}")
+    print()
+    if account.pnl != 0:
+        pnl_sign = "+" if account.pnl > 0 else ""
+        print(f"Today's P&L:      ¥{pnl_sign}{account.pnl:,.2f} ({account.pnl_ratio * 100:+.2f}%)")
+    print("=" * 70)
+    print()
+
+
+def cmd_size(manager: PositionManager, args):
+    """Suggest position size for new purchase."""
+    symbol = args.symbol
+    price = float(args.price)
+    
+    manager.sync_account(force=True)
+    suggestion = manager.suggest_position_size(symbol, price)
+    
+    if not suggestion:
+        print(f"Cannot generate position size suggestion for {symbol}")
+        return
+    
+    print("\n" + "=" * 80)
+    print(f"POSITION SIZE SUGGESTION FOR {symbol}")
+    print("=" * 80)
+    print(f"\nTarget Price:         ¥{suggestion['target_price']:.2f}")
+    print(f"Available Cash:       ¥{suggestion['available_cash']:,.2f}")
+    print()
+    print(f"Maximum Shares:       {suggestion['max_shares']:,} shares (100% cash)")
+    print(f"Recommended Size:     {suggestion['recommended_shares']:,} shares")
+    print(f"Estimated Cost:       ¥{suggestion['estimated_cost']:,.2f}")
+    print(f"Cash Usage:           {suggestion['cash_usage_pct']:.1f}%")
+    print()
+    print(f"Post-Purchase:")
+    print(f"  Concentration:      {suggestion['concentration_after']:.1f}% of portfolio")
+    print(f"  Risk Level:         {suggestion['risk_level'].upper()}")
+    print()
+    print(f"Rationale:")
+    print(f"  {suggestion['rationale']}")
+    print("=" * 80)
+    print()
+
+
 def main(argv=None):
     """Main entry point."""
     parser = argparse.ArgumentParser(
@@ -254,6 +322,14 @@ def main(argv=None):
     parser_export = subparsers.add_parser('export', help='Export positions for AI analysis')
     parser_export.add_argument('output', help='Output JSON file')
     
+    # account command
+    subparsers.add_parser('account', help='Show account balance and cash')
+    
+    # size command
+    parser_size = subparsers.add_parser('size', help='Suggest position size for new purchase')
+    parser_size.add_argument('symbol', help='Stock symbol (e.g., 000858.SZ)')
+    parser_size.add_argument('price', help='Target purchase price')
+    
     args = parser.parse_args(argv)
     
     if not args.command:
@@ -281,6 +357,10 @@ def main(argv=None):
             cmd_risk(manager, args)
         elif args.command == 'export':
             cmd_export(manager, args)
+        elif args.command == 'account':
+            cmd_account(manager, args)
+        elif args.command == 'size':
+            cmd_size(manager, args)
     finally:
         broker.close()
 

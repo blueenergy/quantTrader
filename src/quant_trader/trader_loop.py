@@ -63,12 +63,15 @@ class TraderLoop:
                     # Sync positions periodically
                     if self.position_manager:
                         positions = self.position_manager.sync_positions()
-                        if positions:
+                        account = self.position_manager.sync_account()
+                        
+                        if positions and account:
                             summary = self.position_manager.get_portfolio_summary()
                             log.info(
-                                "Portfolio: %d positions, Value=¥%.2f, P&L=¥%.2f (%.2f%%)",
+                                "Portfolio: %d positions | Total=¥%.2f | Cash=¥%.2f | P&L=¥%.2f (%.2f%%)",
                                 summary["total_positions"],
-                                summary["total_value"],
+                                account.total_asset,
+                                account.available_cash,
                                 summary["total_pnl"],
                                 summary["total_pnl_pct"]
                             )

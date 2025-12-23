@@ -39,6 +39,24 @@ class BrokerAdapter(ABC):
         queries should return an empty dict.
         """
         return {}
+    
+    def query_account(self) -> Dict[str, Any]:
+        """Query account information from broker.
+        
+        Returns:
+            Dict with account data:
+            - total_asset: Total account value (cash + positions)
+            - cash: Available cash
+            - frozen_cash: Cash frozen in pending orders
+            - market_value: Total market value of positions
+            - available_cash: Cash available for trading
+            - buying_power: Maximum buying power
+            - account_type: Account type (e.g., 'stock', 'margin')
+            
+        Note: This is optional. Brokers that don't support account
+        queries should return an empty dict.
+        """
+        return {}
 
     @abstractmethod
     def close(self) -> None:

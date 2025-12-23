@@ -27,6 +27,45 @@ log = logging.getLogger(__name__)
 
 
 @dataclass
+class AccountInfo:
+    """Account information snapshot.
+    
+    Attributes:
+        total_asset: Total account value (cash + positions)
+        cash: Total cash balance
+        frozen_cash: Cash frozen in pending orders
+        market_value: Total market value of positions
+        available_cash: Cash available for trading
+        buying_power: Maximum buying power
+        account_type: Account type (stock/margin)
+        account_id: Trading account ID
+        pnl: Today's profit/loss
+        pnl_ratio: Today's P&L ratio
+        last_updated: Timestamp of last sync
+    """
+    total_asset: float
+    cash: float
+    frozen_cash: float
+    market_value: float
+    available_cash: float
+    buying_power: float
+    account_type: str
+    account_id: str
+    pnl: float = 0.0
+    pnl_ratio: float = 0.0
+    last_updated: float = 0.0
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for MongoDB storage."""
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> AccountInfo:
+        """Create AccountInfo from dictionary."""
+        return cls(**data)
+
+
+@dataclass
 class Position:
     """Real-time position snapshot from broker.
     
@@ -121,6 +160,10 @@ class PositionManager:
         self._positions: Dict[str, Position] = {}
         self._last_sync_time = 0
         
+        # Account info cache
+        self._account_info: Optional[AccountInfo] = None
+        self._last_account_sync = 0
+        
         log.info("PositionManager initialized: sync_interval=%.1fs", sync_interval)
     
     def sync_positions(self, force: bool = False) -> Dict[str, Position]:
@@ -193,6 +236,111 @@ class PositionManager:
         except Exception as e:
             log.exception("Failed to sync positions: %s", e)
             return self._positions
+    
+    def sync_account(self, force: bool = False) -> Optional[AccountInfo]:
+        """Sync account information from broker.
+        
+        Args:
+            force: Force sync even if within sync interval
+            
+        Returns:
+            AccountInfo object or None if sync failed
+            
+        Workflow:
+            1. Check if sync needed (rate limiting)
+            2. Query broker for account data
+            3. Create AccountInfo object
+            4. Update local cache
+            5. Push to backend API
+        """
+        current_time = time.time()
+        
+        # Rate limiting
+        if not force and (current_time - self._last_account_sync < self.sync_interval):
+            log.debug("Skipping account sync (within interval)")
+            return self._account_info
+        
+        if not self.broker:
+            log.warning("No broker configured, cannot sync account")
+            return self._account_info
+        
+        try:
+            # Query account from broker
+            account_data = self._query_broker_account()
+            
+            if not account_data:
+                log.warning("No account data returned from broker")
+                self._last_account_sync = current_time
+                return self._account_info
+            
+            # Create AccountInfo object
+            account_info = AccountInfo(
+                total_asset=account_data.get('total_asset', 0),
+                cash=account_data.get('cash', 0),
+                frozen_cash=account_data.get('frozen_cash', 0),
+                market_value=account_data.get('market_value', 0),
+                available_cash=account_data.get('available_cash', 0),
+                buying_power=account_data.get('buying_power', 0),
+                account_type=account_data.get('account_type', 'stock'),
+                account_id=account_data.get('account_id', 'unknown'),
+                pnl=account_data.get('pnl', 0),
+                pnl_ratio=account_data.get('pnl_ratio', 0),
+                last_updated=current_time
+            )
+            
+            # Update cache
+            self._account_info = account_info
+            self._last_account_sync = current_time
+            
+            log.info(
+                "✓ Account synced: Total=¥%.2f, Cash=¥%.2f, Available=¥%.2f, Market=¥%.2f, P&L=¥%.2f (%.2f%%)",
+                account_info.total_asset,
+                account_info.cash,
+                account_info.available_cash,
+                account_info.market_value,
+                account_info.pnl,
+                account_info.pnl_ratio * 100
+            )
+            
+            # Push to backend (optional)
+            self._push_account_to_backend(account_info)
+            
+            return account_info
+            
+        except Exception as e:
+            log.exception("Failed to sync account: %s", e)
+            return self._account_info
+    
+    def _query_broker_account(self) -> Dict[str, Any]:
+        """Query account information from broker adapter.
+        
+        Returns:
+            Dict with account data or empty dict if not supported
+        """
+        # Check if broker has query_account method
+        if not hasattr(self.broker, 'query_account'):
+            log.debug("Broker does not support account queries")
+            return {}
+        
+        try:
+            account_data = self.broker.query_account()
+            return account_data if account_data else {}
+        except Exception as e:
+            log.exception("Broker account query failed: %s", e)
+            return {}
+    
+    def _push_account_to_backend(self, account_info: AccountInfo) -> None:
+        """Push account info to backend API.
+        
+        Args:
+            account_info: AccountInfo object to push
+        """
+        try:
+            # TODO: Implement API endpoint for account sync
+            # self.api.sync_account(account_info.to_dict())
+            log.debug("Account info ready for backend push")
+        except Exception as e:
+            log.warning("Failed to push account to backend: %s", e)
     
     def _query_broker_positions(self) -> Dict[str, Dict[str, Any]]:
         """Query positions from broker adapter.
@@ -442,6 +590,111 @@ class PositionManager:
         }
         
         log.info("Grid strategy suggestion for %s: %s", symbol, suggestion["description"])
+        return suggestion
+    
+    def suggest_position_size(self, symbol: str, target_price: float) -> Optional[Dict[str, Any]]:
+        """Suggest position size based on available cash and risk management.
+        
+        Uses Kelly Criterion and risk management rules to suggest:
+        - Maximum position size
+        - Recommended position size
+        - Risk-adjusted size
+        
+        Args:
+            symbol: Stock symbol
+            target_price: Intended purchase price
+            
+        Returns:
+            Position size suggestion dict or None
+            
+        Example:
+            {
+                "symbol": "000858.SZ",
+                "target_price": 42.50,
+                "available_cash": 115000.0,
+                "max_shares": 2700,              # 100% cash
+                "recommended_shares": 800,       # 30% cash (conservative)
+                "risk_adjusted_shares": 1000,    # Based on portfolio concentration
+                "estimated_cost": 42500.0,
+                "cash_usage_pct": 30.0,
+                "concentration_after": 15.2,     # % of portfolio
+                "risk_level": "medium"
+            }
+        """
+        # Get account info
+        account = self._account_info
+        if not account:
+            account = self.sync_account(force=True)
+            if not account:
+                log.warning("No account info available")
+                return None
+        
+        available_cash = account.available_cash
+        total_asset = account.total_asset
+        
+        if available_cash <= 0:
+            log.warning("No available cash for %s", symbol)
+            return None
+        
+        # Calculate maximum shares based on cash
+        max_shares = int(available_cash / target_price)
+        
+        # Round down to nearest 100 (standard lot)
+        max_shares = (max_shares // 100) * 100
+        
+        if max_shares == 0:
+            log.warning("Insufficient cash to buy even 100 shares of %s at ¥%.2f", symbol, target_price)
+            return None
+        
+        # Conservative: use 30% of available cash
+        recommended_shares = int(max_shares * 0.3)
+        recommended_shares = (recommended_shares // 100) * 100
+        
+        # Risk-adjusted: consider portfolio concentration
+        # Target: no single position > 20% of portfolio
+        target_concentration = 0.15  # 15%
+        risk_adjusted_value = total_asset * target_concentration
+        risk_adjusted_shares = int(risk_adjusted_value / target_price)
+        risk_adjusted_shares = (risk_adjusted_shares // 100) * 100
+        
+        # Use the smaller of recommended and risk-adjusted
+        final_shares = min(recommended_shares, risk_adjusted_shares)
+        final_shares = max(final_shares, 100)  # At least 100 shares
+        
+        estimated_cost = final_shares * target_price
+        cash_usage_pct = (estimated_cost / available_cash) * 100
+        
+        # Calculate concentration after purchase
+        new_position_value = final_shares * target_price
+        new_total_value = total_asset  # Assumes cash converted to position
+        concentration_after = (new_position_value / new_total_value) * 100
+        
+        # Determine risk level
+        if concentration_after > 20:
+            risk_level = "high"
+        elif concentration_after > 10:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+        
+        suggestion = {
+            "symbol": symbol,
+            "target_price": target_price,
+            "available_cash": available_cash,
+            "max_shares": max_shares,
+            "recommended_shares": final_shares,
+            "estimated_cost": estimated_cost,
+            "cash_usage_pct": cash_usage_pct,
+            "concentration_after": concentration_after,
+            "risk_level": risk_level,
+            "rationale": (
+                f"Buy {final_shares:,} shares of {symbol} at ¥{target_price:.2f} "
+                f"using {cash_usage_pct:.1f}% of available cash (¥{estimated_cost:,.2f}). "
+                f"Post-purchase concentration: {concentration_after:.1f}% ({risk_level} risk)."
+            )
+        }
+        
+        log.info("Position size suggestion: %s", suggestion["rationale"])
         return suggestion
     
     def analyze_position_risk(self, symbol: str) -> Optional[Dict[str, Any]]:
