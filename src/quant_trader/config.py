@@ -17,6 +17,7 @@ class TraderConfig:
     log_level:     Logging level string, e.g. "INFO", "DEBUG"
     broker:        Broker type: "simulated" or "miniQMT"
     miniQMT:       miniQMT broker config (if broker="miniQMT")
+    securities_account_id: MongoDB _id linking to securities_accounts collection
     """
 
     api_base_url: str
@@ -25,6 +26,7 @@ class TraderConfig:
     log_level: str = "INFO"
     broker: str = "simulated"
     miniQMT: Optional[Dict[str, Any]] = field(default_factory=dict)
+    securities_account_id: Optional[str] = None
 
 
 def load_config(config_path: str | None = None) -> TraderConfig:
@@ -75,6 +77,12 @@ def load_config(config_path: str | None = None) -> TraderConfig:
     )
     
     miniQMT = data.get("miniQMT") if isinstance(data.get("miniQMT"), dict) else {}
+    
+    securities_account_id = (
+        data.get("securities_account_id")
+        if isinstance(data.get("securities_account_id"), str)
+        else os.getenv("TRADER_SECURITIES_ACCOUNT_ID")
+    )
 
     return TraderConfig(
         api_base_url=str(api_base_url).rstrip("/"),
@@ -83,4 +91,5 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         log_level=str(log_level),
         broker=str(broker),
         miniQMT=miniQMT,
+        securities_account_id=securities_account_id,
     )

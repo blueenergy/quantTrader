@@ -81,8 +81,8 @@ class Position:
         unrealized_pnl_pct: Unrealized P&L percentage
         holding_days: Days since first purchase
         last_updated: Timestamp of last sync
-        broker: Broker name (e.g., "miniQMT")
-        account_id: Trading account ID
+        broker: Broker company name (e.g., "国金证券"), filled by backend from securities_accounts
+        account_id: Trading account ID at the broker
     """
     symbol: str
     quantity: int
@@ -155,6 +155,9 @@ class PositionManager:
         self.api = api_client
         self.broker = broker
         self.sync_interval = sync_interval
+        
+        # Get broker account info from broker adapter
+        self.broker_account_id = getattr(broker, 'account_id', 'unknown') if broker else 'unknown'
         
         # Local position cache
         self._positions: Dict[str, Position] = {}
@@ -384,6 +387,11 @@ class PositionManager:
             
         Returns:
             Position object with calculated fields
+            
+        Note:
+            The 'broker' and 'account_id' fields will be filled by backend
+            based on securities_account_id when syncing to database.
+            Here we just use placeholder values from broker adapter.
         """
         # Extract basic fields (miniQMT format)
         quantity = int(broker_data.get('volume', 0))
@@ -398,9 +406,9 @@ class PositionManager:
         unrealized_pnl = market_value - cost_basis
         unrealized_pnl_pct = (unrealized_pnl / cost_basis * 100) if cost_basis > 0 else 0.0
         
-        # Get broker info
-        broker_name = getattr(self.broker, '__class__.__name__', 'Unknown')
-        account_id = getattr(self.broker, 'account_id', 'Unknown')
+        # Use broker account_id from adapter
+        # Note: broker name will be filled by backend from securities_accounts table
+        account_id = self.broker_account_id
         
         # Create position
         position = Position(
@@ -415,7 +423,7 @@ class PositionManager:
             unrealized_pnl_pct=unrealized_pnl_pct,
             holding_days=0,  # TODO: Calculate from trade history
             last_updated=time.time(),
-            broker=broker_name,
+            broker='',  # Will be filled by backend from securities_accounts
             account_id=account_id
         )
         

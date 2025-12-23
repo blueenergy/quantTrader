@@ -127,9 +127,90 @@ Log rotation:
   "api_base_url": "string (required) - Base URL of quantFinance backend",
   "api_token": "string (required) - Bearer token from /api/user/login",
   "poll_interval": "float (optional) - Seconds between signal polling, default: 1.0",
-  "log_level": "string (optional) - Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL, default: INFO"
+  "log_level": "string (optional) - Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL, default: INFO",
+  "securities_account_id": "string (optional) - MongoDB _id from securities_accounts collection",
+  "broker": "string (optional) - Broker type: simulated or miniQMT, default: simulated",
+  "miniQMT": {
+    "account_id": "string - miniQMT account ID",
+    "session_path": "string - Path to miniQMT session files"
+  }
 }
 ```
+
+#### Securities Account Linking
+
+The `securities_account_id` field links your quantTrader instance to a configured broker account in the backend database:
+
+**Purpose:**
+- Associates real-time position/account data with specific broker configuration
+- Enables multi-account support (multiple traders, each linked to different broker accounts)
+- Allows querying positions by broker and account_id
+- Provides complete audit trail: config → credentials → real-time data
+
+**How to get securities_account_id:**
+1. Login to quantFinance dashboard
+2. Navigate to Account Settings → Securities Accounts
+3. Add your broker account (broker name, account ID, credentials)
+4. Copy the account ID from the list
+5. Add it to your quantTrader `config.json`:
+
+```json
+{
+  "api_base_url": "http://backend:8000/api",
+  "api_token": "eyJhbGc...",
+  "securities_account_id": "6763f8a2d9e4b1a2c3d4e5f6",
+  "broker": "miniQMT",
+  "miniQMT": {
+    "account_id": "55000001",
+    "session_path": "/path/to/userdata_mini"
+  }
+}
+```
+
+**Database Schema:**
+```
+securities_accounts (static configuration)
+├─ _id: ObjectId
+├─ user_id: string
+├─ broker: string (券商名称，如 "国金证券", "华泰证券")
+├─ account_id: string (券商账号，如 "55000001")
+├─ password_enc: string (加密后的密码)
+└─ created_at: datetime
+
+trader_accounts (real-time balance data)
+├─ user_id: string
+├─ securities_account_id: ObjectId (FK → securities_accounts._id)
+├─ broker: string (自动从 securities_accounts 复制)
+├─ account_id: string (自动从 securities_accounts 复制)
+├─ total_asset: float
+├─ cash: float
+├─ available_cash: float
+└─ synced_at: timestamp
+
+trader_positions (real-time holdings)
+├─ user_id: string
+├─ securities_account_id: ObjectId (FK → securities_accounts._id)
+├─ broker: string (自动从 securities_accounts 复制)
+├─ account_id: string (自动从 securities_accounts 复制)
+├─ symbol: string
+├─ quantity: int
+├─ avg_cost: float
+└─ synced_at: timestamp
+```
+
+**Important Notes:**
+- `broker` field stores the **broker company name** (券商名称), NOT the trading tool name
+- Example valid broker names: "国金证券", "华泰证券", "中信证券"
+- Example invalid: "miniQMT" (this is just a trading interface tool, not a broker)
+- The `broker` field is automatically populated from `securities_accounts` table
+- Multiple brokers can use the same trading tool (e.g., both 国金 and华泰 can use miniQMT)
+
+**Benefits:**
+- **Multi-Account Management**: Run multiple quantTrader instances, each linked to different broker accounts
+- **Data Isolation**: Positions from different accounts are properly separated
+- **Audit Trail**: Track which broker/account generated each trade
+- **Broker Correlation**: Link real-time data back to static account configuration
+- **Permission Control**: Future support for account-level access control
 
 ### Environment Variables
 
@@ -139,6 +220,8 @@ If no `--config` file is provided, quantTrader reads from environment:
 - `TRADER_API_TOKEN` - Bearer token
 - `TRADER_POLL_INTERVAL` - Poll interval in seconds (default: 1.0)
 - `TRADER_LOG_LEVEL` - Logging level (default: INFO)
+- `TRADER_SECURITIES_ACCOUNT_ID` - Securities account MongoDB _id (optional)
+- `TRADER_BROKER` - Broker type: simulated or miniQMT (default: simulated)
 
 ## Architecture
 

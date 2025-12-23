@@ -22,6 +22,7 @@ class TraderApiClient:
     def __init__(self, cfg: TraderConfig) -> None:
         self.base_url = cfg.api_base_url.rstrip("/")
         self.token = cfg.api_token
+        self.securities_account_id = cfg.securities_account_id
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -140,10 +141,14 @@ class TraderApiClient:
         Returns:
             Response dict with success status
         """
+        payload = {
+            "positions": positions,
+            "securities_account_id": self.securities_account_id
+        }
         return self._request(
             "POST",
             "/trader/positions/sync",
-            json=positions
+            json=payload
         )
     
     def sync_account(self, account_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -155,10 +160,14 @@ class TraderApiClient:
         Returns:
             Response dict with success status
         """
+        payload = {
+            "account_data": account_data,
+            "securities_account_id": self.securities_account_id
+        }
         return self._request(
             "POST",
             "/trader/account/sync",
-            json=account_data
+            json=payload
         )
     
     def store_position_snapshot(self, snapshot: Dict[str, Any]) -> Dict[str, Any]:
@@ -170,8 +179,12 @@ class TraderApiClient:
         Returns:
             Response dict with success status
         """
+        payload = {
+            "snapshot": snapshot,
+            "securities_account_id": self.securities_account_id
+        }
         return self._request(
             "POST",
             "/trader/positions/snapshot",
-            json=snapshot
+            json=payload
         )
