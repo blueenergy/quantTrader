@@ -13,6 +13,10 @@ A minimal, REST-based distributed trader client for the quantFinance trading fra
 - **Broker Abstraction**: Pluggable broker adapters allow easy switching between simulators and real brokers (miniQMT, etc.).
 - **Closed-Loop Trading**: Fetches signals → executes → reports results → updates backend status.
 - **Distributed Deployment**: Run independently on any machine with network access to backend (Windows, Linux, Mac).
+- **Position Synchronization**: Real-time position sync from broker for full portfolio control.
+- **Portfolio Management**: Track costs, P&L, risk metrics across all positions.
+- **Strategy Suggestions**: AI-ready analysis and grid strategy generation on existing holdings.
+- **Data Export**: Export position and trade data for AI/ML analysis.
 
 ## Quick Start
 
@@ -93,7 +97,9 @@ You should see logs like:
 2025-12-22 12:34:56 [INFO] quantTrader: Log file: ~/.local/share/quantTrader/logs/quantTrader.log
 2025-12-22 12:34:56 [INFO] quantTrader: Log level: INFO
 2025-12-22 12:34:56 [INFO] quant_trader.trader_loop: quantTrader started. API=http://backend:8000/api
+2025-12-22 12:34:56 [INFO] quant_trader.trader_loop: Position sync: ENABLED (interval=60s)
 2025-12-22 12:34:57 [INFO] quant_trader.trader_loop: Fetched 0 pending signals
+2025-12-22 12:35:57 [INFO] quant_trader.trader_loop: Portfolio: 3 positions, Value=¥125,340.00, P&L=¥+2,450.00 (+2.0%)
 ```
 
 ### Log Files
@@ -329,6 +335,184 @@ def main(argv=None):
     loop = TraderLoop(cfg, api, broker)
     # ...
 ```
+
+## Troubleshooting
+
+### "Connection refused" when starting
+
+## Position Management
+
+### Overview
+
+quantTrader includes comprehensive position management capabilities that enable:
+1. **Real-time position synchronization** from broker accounts
+2. **Portfolio monitoring** with P&L tracking
+3. **Grid strategy suggestions** for cost reduction on existing holdings
+4. **Risk analysis** across all positions
+5. **Data export** for AI/ML analysis
+
+### Position CLI Tools
+
+```bash
+# View all current positions
+python -m quant_trader.position_cli --config config.json positions
+
+# Show portfolio summary
+python -m quant_trader.position_cli --config config.json summary
+
+# Get grid strategy suggestion for reducing cost
+python -m quant_trader.position_cli --config config.json grid 000858.SZ
+
+# Analyze risk across portfolio
+python -m quant_trader.position_cli --config config.json risk
+
+# Export all data for AI analysis
+python -m quant_trader.position_cli --config config.json export positions.json
+```
+
+### Example: View Positions
+
+```bash
+$ python -m quant_trader.position_cli --config config.json positions
+
+====================================================================================================
+Symbol           Qty    Avail      Cost      Price        Value          P&L      P&L%
+====================================================================================================
+000858.SZ       1000     1000    ¥42.50     ¥43.20    ¥43,200.00      ¥700.00    +1.65%
+002050.SZ        500      500    ¥38.00     ¥37.50    ¥18,750.00     ¥-250.00    -1.32%
+600519.SH        100      100   ¥1850.00   ¥1920.00   ¥192,000.00    ¥7,000.00    +3.78%
+====================================================================================================
+```
+
+### Example: Portfolio Summary
+
+```bash
+$ python -m quant_trader.position_cli --config config.json summary
+
+============================================================
+PORTFOLIO SUMMARY
+============================================================
+Total Positions:  3
+Total Value:      ¥253,950.00
+Total Cost:       ¥246,500.00
+Total P&L:        ¥+7,450.00
+Total P&L %:      +3.02%
+Last Sync:        2025-12-23T11:45:00
+============================================================
+
+Top Positions by Value:
+------------------------------------------------------------
+1. 600519.SH      Value=  ¥192,000.00 P&L=  +7000.00 ( +3.78%)
+2. 000858.SZ      Value=   ¥43,200.00 P&L=   +700.00 ( +1.65%)
+3. 002050.SZ      Value=   ¥18,750.00 P&L=   -250.00 ( -1.32%)
+```
+
+### Example: Grid Strategy Suggestion
+
+```bash
+$ python -m quant_trader.position_cli --config config.json grid 000858.SZ
+
+================================================================================
+GRID STRATEGY SUGGESTION FOR 000858.SZ
+================================================================================
+
+Current Position:
+  Quantity:        1,000 shares
+  Average Cost:    ¥42.50
+  Current Price:   ¥43.20
+  Unrealized P&L:  +1.65%
+
+Suggested Grid Parameters:
+  Number of Grids:     10
+  Grid Spacing:        5.0%
+  Buy Grid Size:       100 shares
+  Sell Grid Size:      100 shares
+
+Expected Outcome:
+  Target Cost:         ¥40.38
+  Cost Reduction:      5.0%
+  Max Position:        1,500 shares
+  Estimated Duration:  30 days
+
+Description:
+  Grid strategy to reduce cost from ¥42.50 to ¥40.38 by buying 100 shares
+  on 5% dips and selling on rallies
+================================================================================
+```
+
+### Example: Risk Analysis
+
+```bash
+$ python -m quant_trader.position_cli --config config.json risk
+
+====================================================================================================
+RISK ANALYSIS
+====================================================================================================
+Symbol       Concentration     Drawdown  Liquidity Risk  Risk Score
+====================================================================================================
+000858.SZ           17.01%       0.00%            0.00%         0/100
+002050.SZ            7.38%       1.32%            0.00%        40/100
+600519.SH           75.61%       0.00%            0.00%        30/100
+====================================================================================================
+```
+
+**Risk Score Interpretation**:
+- **0-30**: Low risk
+- **31-60**: Medium risk (consider rebalancing)
+- **61-100**: High risk (immediate action needed)
+
+### Strategic Use Cases
+
+#### 1. Cost Reduction on Losing Positions
+
+```python
+# Get suggestion for underwater position
+python -m quant_trader.position_cli --config config.json grid 002050.SZ
+
+# Implement suggested grid strategy in quantFinance backend
+# This will:
+# - Buy more shares on dips (DCA)
+# - Sell partial positions on rallies
+# - Gradually reduce average cost
+```
+
+#### 2. AI-Powered Portfolio Analysis
+
+```bash
+# Export all position data
+python -m quant_trader.position_cli --config config.json export portfolio_data.json
+
+# Feed to AI model for:
+# - Risk pattern recognition
+# - Optimal strategy selection
+# - Entry/exit timing suggestions
+# - Portfolio rebalancing recommendations
+```
+
+#### 3. Real-time Monitoring Integration
+
+The position manager automatically syncs every 60 seconds when running the main trader:
+
+```bash
+python -m quant_trader.cli --config config.json
+
+# Logs will show:
+# [INFO] Portfolio: 3 positions, Value=¥253,950.00, P&L=¥+7,450.00 (+3.02%)
+```
+
+### Integration with Strategies
+
+**Scenario**: You hold 1000 shares of 000858.SZ at ¥42.50 cost, current price ¥40.00 (-5.9%)
+
+**Without Position Sync**: Worker generates buy/sell signals with no awareness of existing position
+
+**With Position Sync**:
+1. Position manager detects underwater position
+2. Suggests 10-level grid strategy (5% spacing)
+3. Worker can execute grid strategy ON TOP of existing position
+4. Grid buys at ¥38.00, ¥36.10, ¥34.30... (dollar-cost averaging)
+5. Grid sells at ¥42.00, ¥44.10, ¥46.30... (profit taking)
+6. Result: Average cost reduced from ¥42.50 to ¥40.38 over 30 days
 
 ## Troubleshooting
 

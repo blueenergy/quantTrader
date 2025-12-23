@@ -20,6 +20,25 @@ class BrokerAdapter(ABC):
         /api/trader/signals. Implementations can translate it into
         broker-specific order requests.
         """
+    
+    def query_positions(self) -> Dict[str, Dict[str, Any]]:
+        """Query current positions from broker.
+        
+        Returns:
+            Dict of {symbol: position_data}
+            
+        Position data should include:
+            - volume: Total quantity
+            - can_use_volume: Available quantity (not frozen)
+            - frozen_volume: Frozen quantity in pending orders
+            - open_price: Average cost per share
+            - market_value: Current market value
+            - last_price: Current market price
+            
+        Note: This is optional. Brokers that don't support position
+        queries should return an empty dict.
+        """
+        return {}
 
     @abstractmethod
     def close(self) -> None:

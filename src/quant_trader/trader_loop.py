@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .api_client import TraderApiClient
 from .broker_base import BrokerAdapter
 from .config import TraderConfig
+from .position_manager import PositionManager
 
 log = logging.getLogger("quantTrader")
 
@@ -16,18 +17,35 @@ class TraderLoop:
 
     Pulls signals from backend, sends them to the broker, and reports
     executions back to backend via REST API.
-
-    This minimal version uses a simple model: once an order is accepted
-    by the broker, we immediately report it as fully filled (simulated
-    execution). Later you can extend this to handle partial fills and
-    real-time execution callbacks.
+    
+    Enhanced features:
+    - Position synchronization from broker
+    - Real-time portfolio monitoring
+    - Strategy suggestions based on positions
+    - Data foundation for AI analysis
     """
 
-    def __init__(self, cfg: TraderConfig, api: TraderApiClient, broker: BrokerAdapter) -> None:
+    def __init__(
+        self,
+        cfg: TraderConfig,
+        api: TraderApiClient,
+        broker: BrokerAdapter,
+        enable_position_sync: bool = True
+    ) -> None:
         self.cfg = cfg
         self.api = api
         self.broker = broker
         self._stop = False
+        
+        # Position manager (optional)
+        self.position_manager: Optional[PositionManager] = None
+        if enable_position_sync:
+            self.position_manager = PositionManager(
+                api_client=api,
+                broker=broker,
+                sync_interval=60.0  # Sync every 60 seconds
+            )
+            log.info("Position synchronization ENABLED")
 
     def stop(self) -> None:
         self._stop = True
@@ -36,10 +54,26 @@ class TraderLoop:
         log.info("quantTrader started. API=%s", self.cfg.api_base_url)
         log.info("Poll interval: %.1f seconds", self.cfg.poll_interval)
         log.info("Broker type: %s", type(self.broker).__name__)
+        if self.position_manager:
+            log.info("Position sync: ENABLED (interval=60s)")
         
         try:
             while not self._stop:
                 try:
+                    # Sync positions periodically
+                    if self.position_manager:
+                        positions = self.position_manager.sync_positions()
+                        if positions:
+                            summary = self.position_manager.get_portfolio_summary()
+                            log.info(
+                                "Portfolio: %d positions, Value=¥%.2f, P&L=¥%.2f (%.2f%%)",
+                                summary["total_positions"],
+                                summary["total_value"],
+                                summary["total_pnl"],
+                                summary["total_pnl_pct"]
+                            )
+                    
+                    # Poll for trading signals
                     log.debug("Polling for signals...")
                     signals = self.api.get_pending_signals(limit=50, include_submitted=False)
                     
@@ -50,6 +84,7 @@ class TraderLoop:
                     
                     for sig in signals:
                         self._handle_signal(sig)
+                        
                 except Exception as e:  # noqa: BLE001
                     log.exception("Error in main loop: %s", e)
 

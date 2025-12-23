@@ -115,9 +115,18 @@ class MiniQMTBroker(BrokerAdapter):
         if not all([symbol, action, size]):
             raise ValueError(f"Invalid signal: missing required fields. signal={signal}")
         
-        # Map action to miniQMT side
-        # 23 = Buy, 24 = Sell (XtQuantTrader constants)
+        # Normalize symbol: add exchange suffix if missing
         stock_code = symbol
+        if "." not in stock_code:
+            # Determine exchange by stock code pattern
+            if stock_code.startswith(("6", "5")):
+                stock_code = f"{stock_code}.SH"  # Shanghai: 60xxxx, 51xxxx
+            elif stock_code.startswith(("0", "3", "2")):
+                stock_code = f"{stock_code}.SZ"  # Shenzhen: 00xxxx, 30xxxx, 20xxxx
+            else:
+                log.warning("Unknown stock code pattern: %s, using as-is", stock_code)
+        
+        log.info("Normalized symbol: %s -> %s", symbol, stock_code)
         
         if action.upper() == "BUY":
             order_side = xtconstant.STOCK_BUY
@@ -162,6 +171,64 @@ class MiniQMTBroker(BrokerAdapter):
         except Exception as e:
             log.exception("Failed to place order via miniQMT: %s", e)
             raise RuntimeError(f"miniQMT order failed: {e}") from e
+    
+    def query_positions(self) -> Dict[str, Dict[str, Any]]:
+        """Query current positions from miniQMT.
+        
+        Returns:
+            Dict of {symbol: position_data}
+            
+        Position data format:
+            {
+                "000858.SZ": {
+                    "volume": 1000,              # Total shares
+                    "can_use_volume": 800,       # Available to sell
+                    "frozen_volume": 200,        # Frozen in orders
+                    "open_price": 42.50,         # Average cost
+                    "market_value": 43500.0,     # Current value
+                    "last_price": 43.50,         # Current price
+                    "on_road_volume": 0,         # In-transit shares
+                    "yesterday_volume": 1000      # Previous day position
+                }
+            }
+        """
+        if not self.xt_trader or not self.acc:
+            log.warning("miniQMT not connected, cannot query positions")
+            return {}
+        
+        try:
+            log.debug("Querying positions from miniQMT...")
+            
+            # Query stock positions
+            # query_stock_positions(account) returns a list of position objects
+            positions = self.xt_trader.query_stock_positions(self.acc)
+            
+            if not positions:
+                log.debug("No positions found")
+                return {}
+            
+            log.info("✓ Queried %d positions from miniQMT", len(positions))
+            
+            # Convert position data to standard format
+            result = {}
+            for pos in positions:
+                symbol = pos.stock_code
+                result[symbol] = {
+                    "volume": pos.volume,
+                    "can_use_volume": pos.can_use_volume,
+                    "frozen_volume": pos.frozen_volume,
+                    "open_price": pos.open_price,
+                    "market_value": pos.market_value,
+                    "last_price": pos.last_price,
+                    "on_road_volume": getattr(pos, 'on_road_volume', 0),
+                    "yesterday_volume": getattr(pos, 'yesterday_volume', 0)
+                }
+            
+            return result
+            
+        except Exception as e:
+            log.exception("Failed to query positions from miniQMT: %s", e)
+            return {}
     
     def close(self) -> None:
         """
