@@ -57,6 +57,39 @@ class BrokerAdapter(ABC):
         queries should return an empty dict.
         """
         return {}
+    
+    def get_execution_status(self) -> Dict[str, Dict[str, Any]]:
+        """Get execution status for all tracked orders.
+        
+        Returns:
+            Dict of {broker_order_id: execution_status_data}
+            
+        Execution status data should include:
+            - status: Current status ('submitted', 'partial', 'filled', 'rejected', etc.)
+            - filled_size: Number of shares filled
+            - avg_price: Average execution price
+            - commission: Commission paid
+            - timestamp: Last update timestamp
+            
+        Note: This is optional. Brokers that don't support status
+        queries should return an empty dict.
+        """
+        return {}
+    
+    def get_account_info(self) -> Dict[str, Any]:
+        """Get account metadata information.
+        
+        Returns:
+            Dict with account metadata:
+            - account_id: Broker-specific account ID
+            - broker: Broker name/type
+            - user_id: User ID (if applicable)
+            - account_type: Account type
+            
+        Note: This is optional. Brokers that don't support account
+        info should return an empty dict.
+        """
+        return {}
 
     @abstractmethod
     def close(self) -> None:

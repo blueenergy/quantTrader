@@ -188,3 +188,39 @@ class TraderApiClient:
             "/trader/positions/snapshot",
             json=payload
         )
+    
+    def update_position(self, position_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Update a single position in backend.
+        
+        Args:
+            position_data: Position data with symbol, qty, and metadata
+            
+        Returns:
+            Response dict with success status
+        """
+        return self._request(
+            "POST",
+            "/trader/positions",
+            json=position_data
+        )
+    
+    def cleanup_stale_positions(self, current_symbols: List[str], 
+                                 account_id: str = None) -> Dict[str, Any]:
+        """Remove stale positions from backend.
+        
+        Args:
+            current_symbols: List of symbols currently held
+            account_id: Optional account ID to filter positions
+            
+        Returns:
+            Response dict with cleanup result
+        """
+        payload = {
+            "current_symbols": current_symbols,
+            "account_id": account_id
+        }
+        return self._request(
+            "DELETE",
+            "/trader/positions/cleanup",
+            json=payload
+        )
