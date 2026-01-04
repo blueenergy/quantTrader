@@ -302,6 +302,41 @@ class MiniQMTBroker(BrokerAdapter):
             log.exception("Failed to query account from miniQMT: %s", e)
             return {}
     
+    def get_execution_status(self) -> Dict[str, Dict[str, Any]]:
+        """Get execution status for all tracked orders from miniQMT.
+        
+        Note: miniQMT doesn't provide real-time execution status polling.
+        In a real implementation, this would require tracking orders internally
+        and using callbacks (_on_order callback) to update status.
+        
+        For now, returns empty dict - real implementation would need to
+        track order status internally using the miniQMT callback system.
+        """
+        # In a real implementation, this would query pending orders
+        # and return status for each. For now, returning empty dict.
+        # 
+        # The real implementation would need to:
+        # 1. Track orders internally with their miniQMT order IDs
+        # 2. Use miniQMT callbacks to update order status
+        # 3. Return current status when polled
+        return {}
+    
+    def get_account_info(self) -> Dict[str, Any]:
+        """Get account metadata information.
+        
+        Returns:
+            Dict with account metadata:
+            - account_id: Broker-specific account ID
+            - broker: Broker name/type
+            - user_id: User ID (if applicable)
+            - account_type: Account type
+        """
+        return {
+            "account_id": self.account_id,
+            "broker": "miniQMT",
+            "account_type": "stock",
+        }
+    
     def close(self) -> None:
         """
         Disconnect from miniQMT and cleanup resources.

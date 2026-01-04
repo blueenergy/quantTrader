@@ -39,5 +39,29 @@ class SimulatedBroker(BrokerAdapter):
         broker_order_id = f"SIM-{int(time.time())}"
         return broker_order_id
 
+    def get_execution_status(self) -> Dict[str, Dict[str, Any]]:
+        """Get execution status for all tracked orders from simulated broker.
+        
+        In simulated mode, we could implement basic execution simulation.
+        For now, returns empty dict.
+        """
+        return {}
+    
+    def get_account_info(self) -> Dict[str, Any]:
+        """Get account metadata information for simulated broker.
+        
+        Returns:
+            Dict with account metadata:
+            - account_id: Broker-specific account ID
+            - broker: Broker name/type
+            - user_id: User ID (if applicable)
+            - account_type: Account type
+        """
+        return {
+            "account_id": "SIMULATED_ACCOUNT",
+            "broker": "simulated",
+            "account_type": "paper",
+        }
+    
     def close(self) -> None:
         log.info("SIMULATED broker closed")
