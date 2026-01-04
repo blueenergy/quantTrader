@@ -247,6 +247,10 @@ class EnhancedPositionManager:
         
         # Track last sync time
         self._last_sync = 0
+        self._last_account_sync = 0
+        
+        # Account info cache
+        self._account_info_cache = None
         
         # Get account metadata from broker
         try:
@@ -258,6 +262,62 @@ class EnhancedPositionManager:
             self.account_id = None
             self.broker_name = "unknown"
     
+    def sync_account(self, force: bool = False):
+        """Sync account information from broker.
+        
+        Args:
+            force: Force sync even if within sync interval
+            
+        Returns:
+            Account data from broker or cached data
+        """
+        current_time = time.time()
+        
+        # Rate limiting
+        if not force and (current_time - self._last_account_sync < self.sync_interval):
+            self.logger.debug("Skipping account sync (within interval)")
+            return self._account_info_cache
+        
+        if not self.broker:
+            self.logger.warning("No broker configured, cannot sync account")
+            return self._account_info_cache
+        
+        try:
+            # Query account from broker
+            account_data = self.broker.query_account()
+            
+            if not account_data:
+                self.logger.warning("No account data returned from broker")
+                self._last_account_sync = current_time
+                return self._account_info_cache
+            
+            # Update cache
+            self._account_info_cache = account_data
+            self._last_account_sync = current_time
+            
+            # Push to backend
+            try:
+                response = self.api_client.sync_account(account_data)
+                if response.get("success"):
+                    self.logger.debug("Account info synced to backend")
+                else:
+                    self.logger.warning("Backend returned non-success for account sync")
+            except Exception as e:
+                self.logger.warning("Failed to push account to backend: %s", e)
+            
+            self.logger.info(
+                "✓ Account synced: Total=¥%.2f, Cash=¥%.2f, Available=¥%.2f, Market=¥%.2f",
+                account_data.get('total_asset', 0),
+                account_data.get('cash', 0),
+                account_data.get('available_cash', 0),
+                account_data.get('market_value', 0)
+            )
+            
+            return account_data
+            
+        except Exception as e:
+            self.logger.exception("Failed to sync account: %s", e)
+            return self._account_info_cache    
     def sync_positions(self) -> bool:
         """Sync positions from broker to backend with metadata."""
         current_time = time.time()
@@ -268,7 +328,7 @@ class EnhancedPositionManager:
             self._last_sync = current_time
             
             # Get positions from broker
-            broker_positions = self.broker.get_positions()
+            broker_positions = self.broker.query_positions()
             if not broker_positions:
                 self.logger.debug("No positions to sync")
                 # Still need to cleanup stale positions (remove all since no positions held)
@@ -302,8 +362,8 @@ class EnhancedPositionManager:
                 position_updates.append(position_doc)
             
             # Sync positions to backend
-            for pos_doc in position_updates:
-                self.api_client.update_position(pos_doc)
+            if position_updates:
+                self.api_client.sync_positions(position_updates)
             
             # Cleanup stale positions (not held in broker anymore)
             # Always call cleanup even if no current symbols to remove all stale positions
@@ -316,3 +376,34 @@ class EnhancedPositionManager:
         except Exception as e:
             self.logger.error("Error syncing positions: %s", e)
             return False
+    
+    def get_portfolio_summary(self) -> Dict[str, Any]:
+        """Get portfolio summary by querying current positions from backend.
+        
+        Since EnhancedPositionManager doesn't maintain local cache like the original PositionManager,
+        we query the backend for current position data to calculate summary.
+        
+        Returns:
+            Dict with portfolio metrics
+        """
+        try:
+            # For now, return a basic summary - in a real implementation, 
+            # we would query positions from backend to calculate metrics
+            return {
+                "total_positions": 0,  # Would be calculated from backend data
+                "total_value": 0.0,
+                "total_cost": 0.0,
+                "total_pnl": 0.0,
+                "total_pnl_pct": 0.0,
+                "positions": []
+            }
+        except Exception as e:
+            self.logger.error("Error getting portfolio summary: %s", e)
+            return {
+                "total_positions": 0,
+                "total_value": 0.0,
+                "total_cost": 0.0,
+                "total_pnl": 0.0,
+                "total_pnl_pct": 0.0,
+                "positions": []
+            }

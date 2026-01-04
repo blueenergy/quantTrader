@@ -17,6 +17,10 @@ class TraderApiClient:
       - GET  /api/trader/signals
       - POST /api/trader/signals/{order_id}/status
       - POST /api/trader/executions
+      - POST /api/trader/positions/sync
+      - DELETE /api/trader/positions/cleanup
+      - POST /api/trader/account/sync
+      - POST /api/trader/positions/snapshot
     """
 
     def __init__(self, cfg: TraderConfig) -> None:
@@ -206,18 +210,21 @@ class TraderApiClient:
     
     def cleanup_stale_positions(self, current_symbols: List[str], 
                                  account_id: str = None) -> Dict[str, Any]:
-        """Remove stale positions from backend.
+        """Remove stale positions not currently held by broker.
+        
+        Deletes all positions whose symbols are NOT in current_symbols.
+        This ensures the backend only stores positions actually held.
         
         Args:
             current_symbols: List of symbols currently held
-            account_id: Optional account ID to filter positions
+            account_id: Optional account ID (maps to securities_account_id in backend)
             
         Returns:
-            Response dict with cleanup result
+            Response dict with deleted_count and timestamp
         """
         payload = {
             "current_symbols": current_symbols,
-            "account_id": account_id
+            "securities_account_id": account_id
         }
         return self._request(
             "DELETE",

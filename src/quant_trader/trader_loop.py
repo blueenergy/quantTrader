@@ -7,7 +7,6 @@ from typing import Any, Dict, Optional
 from .api_client import TraderApiClient
 from .broker_base import BrokerAdapter
 from .config import TraderConfig
-from .position_manager import PositionManager
 from .execution_tracker import ExecutionTracker, EnhancedPositionManager
 
 log = logging.getLogger("quantTrader")
