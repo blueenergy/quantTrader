@@ -8,6 +8,7 @@ from .api_client import TraderApiClient
 from .broker_base import BrokerAdapter
 from .config import TraderConfig
 from .position_manager import PositionManager
+from .execution_tracker import ExecutionTracker, EnhancedPositionManager
 
 log = logging.getLogger("quantTrader")
 
@@ -19,7 +20,8 @@ class TraderLoop:
     executions back to backend via REST API.
     
     Enhanced features:
-    - Position synchronization from broker
+    - Proper execution tracking (submitted → filled/partial/rejected)
+    - Position synchronization from broker with metadata
     - Real-time portfolio monitoring
     - Strategy suggestions based on positions
     - Data foundation for AI analysis
@@ -30,17 +32,27 @@ class TraderLoop:
         cfg: TraderConfig,
         api: TraderApiClient,
         broker: BrokerAdapter,
-        enable_position_sync: bool = True
+        enable_position_sync: bool = True,
+        enable_execution_tracking: bool = True
     ) -> None:
         self.cfg = cfg
         self.api = api
         self.broker = broker
         self._stop = False
         
-        # Position manager (optional)
-        self.position_manager: Optional[PositionManager] = None
+        # Execution tracker (replaces immediate 'filled' marking)
+        self.execution_tracker: Optional[ExecutionTracker] = None
+        if enable_execution_tracking:
+            self.execution_tracker = ExecutionTracker(
+                api_client=api,
+                broker=broker
+            )
+            log.info("Execution tracking ENABLED")
+        
+        # Enhanced position manager with metadata
+        self.position_manager: Optional[EnhancedPositionManager] = None
         if enable_position_sync:
-            self.position_manager = PositionManager(
+            self.position_manager = EnhancedPositionManager(
                 api_client=api,
                 broker=broker,
                 sync_interval=60.0  # Sync every 60 seconds
@@ -56,6 +68,8 @@ class TraderLoop:
         log.info("Broker type: %s", type(self.broker).__name__)
         if self.position_manager:
             log.info("Position sync: ENABLED (interval=60s)")
+        if self.execution_tracker:
+            log.info("Execution tracking: ENABLED")
         
         try:
             while not self._stop:
@@ -88,6 +102,10 @@ class TraderLoop:
                     for sig in signals:
                         self._handle_signal(sig)
                         
+                    # Poll execution status if enabled
+                    if self.execution_tracker:
+                        self.execution_tracker.poll_execution_status()
+                        
                 except Exception as e:  # noqa: BLE001
                     log.exception("Error in main loop: %s", e)
 
@@ -112,56 +130,77 @@ class TraderLoop:
             log.warning("Skip signal without order_id: %s", sig)
             return
 
-        try:
-            # 1) send order to broker
-            log.debug("Placing order to broker: %s", order_id)
-            broker_order_id = self.broker.place_order(sig)
-            log.info("Order placed successfully: order_id=%s, broker_order_id=%s", 
-                     order_id, broker_order_id)
-
-            # 2) mark as submitted
-            log.debug("Updating signal status to 'submitted': %s", order_id)
-            self.api.update_signal_status(order_id, {
-                "status": "submitted",
-                "qmt_order_id": broker_order_id,
-            })
-
-            # 3) minimal version: treat as immediately filled
-            filled_price = sig.get("price") or 100.0
-            filled_size = sig.get("size") or 0
-
-            execution = {
-                "order_id": order_id,
-                "symbol": sig.get("symbol"),
-                "action": sig.get("action"),
-                "size": sig.get("size"),
-                "target_price": sig.get("price"),
-                "filled_price": filled_price,
-                "filled_size": filled_size,
-                "commission": 0.0,
-                "status": "filled",
-                "broker": sig.get("broker", "simulated"),
-                "mode": "live",
-                "qmt_order_id": broker_order_id,
-                "securities_account_id": sig.get("securities_account_id"),
-                "account_id": sig.get("account_id"),
-                "strategy": sig.get("strategy"),
-                "strategy_name": sig.get("strategy_name", sig.get("strategy", "")),
-            }
-            
-            log.debug("Reporting execution: %s", order_id)
-            self.api.create_execution(execution)
-            log.info("✓ Execution reported successfully: order_id=%s, symbol=%s, action=%s", 
-                     order_id, symbol, action)
-
-        except Exception as e:  # noqa: BLE001
-            log.error("✗ Failed to process signal %s: %s", order_id, e, exc_info=True)
-            # Minimal fallback: mark as retry_pending so backend/monitor can see it
+        # Use execution tracker for proper lifecycle management
+        if self.execution_tracker:
             try:
+                success = self.execution_tracker.submit_order(sig)
+                if success:
+                    log.info("Order submitted successfully: %s", order_id)
+                else:
+                    log.error("Failed to submit order: %s", order_id)
+            except Exception as e:
+                log.error("✗ Failed to submit signal %s: %s", order_id, e, exc_info=True)
+                # Fallback: mark as retry_pending
+                try:
+                    self.api.update_signal_status(order_id, {
+                        "status": "retry_pending",
+                        "last_error": str(e),
+                    })
+                    log.info("Marked signal as retry_pending: %s", order_id)
+                except Exception:  # noqa: BLE001
+                    log.exception("Failed to update signal status for %s", order_id)
+        else:
+            # Fallback to old behavior if execution tracker not enabled
+            try:
+                # 1) send order to broker
+                log.debug("Placing order to broker: %s", order_id)
+                broker_order_id = self.broker.place_order(sig)
+                log.info("Order placed successfully: order_id=%s, broker_order_id=%s", 
+                         order_id, broker_order_id)
+
+                # 2) mark as submitted
+                log.debug("Updating signal status to 'submitted': %s", order_id)
                 self.api.update_signal_status(order_id, {
-                    "status": "retry_pending",
-                    "last_error": str(e),
+                    "status": "submitted",
+                    "qmt_order_id": broker_order_id,
                 })
-                log.info("Marked signal as retry_pending: %s", order_id)
-            except Exception:  # noqa: BLE001
-                log.exception("Failed to update signal status for %s", order_id)
+
+                # 3) minimal version: treat as immediately filled
+                filled_price = sig.get("price") or 100.0
+                filled_size = sig.get("size") or 0
+
+                execution = {
+                    "order_id": order_id,
+                    "symbol": sig.get("symbol"),
+                    "action": sig.get("action"),
+                    "size": sig.get("size"),
+                    "target_price": sig.get("price"),
+                    "filled_price": filled_price,
+                    "filled_size": filled_size,
+                    "commission": 0.0,
+                    "status": "filled",
+                    "broker": sig.get("broker", "simulated"),
+                    "mode": "live",
+                    "qmt_order_id": broker_order_id,
+                    "securities_account_id": sig.get("securities_account_id"),
+                    "account_id": sig.get("account_id"),
+                    "strategy": sig.get("strategy"),
+                    "strategy_name": sig.get("strategy_name", sig.get("strategy", "")),
+                }
+                
+                log.debug("Reporting execution: %s", order_id)
+                self.api.create_execution(execution)
+                log.info("✓ Execution reported successfully: order_id=%s, symbol=%s, action=%s", 
+                         order_id, symbol, action)
+
+            except Exception as e:  # noqa: BLE001
+                log.error("✗ Failed to process signal %s: %s", order_id, e, exc_info=True)
+                # Minimal fallback: mark as retry_pending so backend/monitor can see it
+                try:
+                    self.api.update_signal_status(order_id, {
+                        "status": "retry_pending",
+                        "last_error": str(e),
+                    })
+                    log.info("Marked signal as retry_pending: %s", order_id)
+                except Exception:  # noqa: BLE001
+                    log.exception("Failed to update signal status for %s", order_id)
