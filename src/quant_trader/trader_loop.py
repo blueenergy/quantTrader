@@ -80,11 +80,14 @@ class TraderLoop:
                         
                         if positions and account:
                             summary = self.position_manager.get_portfolio_summary()
+                            # account is a dict, not an object
+                            total_asset = account.get('total_asset', 0) if isinstance(account, dict) else account.total_asset
+                            available_cash = account.get('available_cash', 0) if isinstance(account, dict) else account.available_cash
                             log.info(
                                 "Portfolio: %d positions | Total=¥%.2f | Cash=¥%.2f | P&L=¥%.2f (%.2f%%)",
                                 summary["total_positions"],
-                                account.total_asset,
-                                account.available_cash,
+                                total_asset,
+                                available_cash,
                                 summary["total_pnl"],
                                 summary["total_pnl_pct"]
                             )
