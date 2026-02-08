@@ -340,17 +340,17 @@ class EnhancedPositionManager:
             position_updates = []
             
             for symbol, pos_data in broker_positions.items():
-                # Remove exchange suffix for standardization (e.g., "002050.SZ" -> "002050")
-                base_symbol = symbol.split('.')[0] if '.' in symbol else symbol
-                current_symbols.add(base_symbol)
+                # Preserve exchange suffix for consistency with order placement (e.g., "002050.SZ")
+                current_symbols.add(symbol)
                 
                 # Create position document with metadata
                 position_doc = {
-                    "symbol": base_symbol,
-                    "qty": pos_data.get('qty', 0),
+                    "symbol": symbol,
+                    "qty": pos_data.get('volume', 0),  # Map 'volume' from broker to 'qty' for storage
                     "can_use_volume": pos_data.get('can_use_volume', 0),
                     "frozen_volume": pos_data.get('frozen_volume', 0),
-                    "avg_price": pos_data.get('avg_price', 0.0),
+                    "avg_price": pos_data.get('open_price', 0.0),  # Map 'open_price' from broker to 'avg_price' for storage
+                    "last_price": pos_data.get('last_price', 0.0),  # Add current market price
                     "market_value": pos_data.get('market_value', 0.0),
                     "on_road_volume": pos_data.get('on_road_volume', 0),
                     "timestamp": current_time,
@@ -358,6 +358,20 @@ class EnhancedPositionManager:
                     "account_id": self.account_id,
                     "broker": self.broker_name,
                 }
+                
+                # Calculate unrealized P&L
+                avg_price = pos_data.get('open_price', 0.0)
+                quantity = pos_data.get('volume', 0)
+                market_value = pos_data.get('market_value', 0.0)
+                last_price = pos_data.get('last_price', avg_price)
+                
+                cost_basis = avg_price * quantity
+                unrealized_pnl = market_value - cost_basis if market_value != 0 else (last_price * quantity) - cost_basis
+                unrealized_pnl_pct = (unrealized_pnl / cost_basis * 100) if cost_basis > 0 else 0.0
+                
+                # Add P&L fields to position document
+                position_doc["unrealized_pnl"] = unrealized_pnl
+                position_doc["unrealized_pnl_pct"] = unrealized_pnl_pct
                 
                 position_updates.append(position_doc)
             
@@ -387,15 +401,37 @@ class EnhancedPositionManager:
             Dict with portfolio metrics
         """
         try:
-            # For now, return a basic summary - in a real implementation, 
-            # we would query positions from backend to calculate metrics
+            # Calculate from current positions (since we just synced)
+            positions = self.broker.query_positions()
+            
+            total_value = 0.0
+            total_cost = 0.0
+            total_pnl = 0.0
+            
+            for symbol, pos_data in positions.items():
+                quantity = pos_data.get('volume', 0)
+                avg_price = pos_data.get('open_price', 0.0)
+                market_value = pos_data.get('market_value', 0.0)
+                last_price = pos_data.get('last_price', avg_price)
+                
+                cost_basis = avg_price * quantity
+                # Use market_value if available, otherwise calculate from last_price
+                current_value = market_value if market_value != 0 else last_price * quantity
+                pnl = current_value - cost_basis
+                
+                total_value += current_value
+                total_cost += cost_basis
+                total_pnl += pnl
+            
+            total_pnl_pct = (total_pnl / total_cost * 100) if total_cost > 0 else 0.0
+            
             return {
-                "total_positions": 0,  # Would be calculated from backend data
-                "total_value": 0.0,
-                "total_cost": 0.0,
-                "total_pnl": 0.0,
-                "total_pnl_pct": 0.0,
-                "positions": []
+                "total_positions": len(positions),
+                "total_value": total_value,
+                "total_cost": total_cost,
+                "total_pnl": total_pnl,
+                "total_pnl_pct": total_pnl_pct,
+                "positions": []  # Could be expanded to include position details
             }
         except Exception as e:
             self.logger.error("Error getting portfolio summary: %s", e)
