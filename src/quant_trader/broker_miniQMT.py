@@ -302,24 +302,104 @@ class MiniQMTBroker(BrokerAdapter):
             log.exception("Failed to query account from miniQMT: %s", e)
             return {}
     
+    def query_orders(self) -> Dict[str, Any]:
+        """Query all orders from miniQMT.
+        
+        Returns:
+            Dict of {order_id: order_data}
+        """
+        if not self.xt_trader or not self.acc:
+            log.warning("miniQMT not connected, cannot query orders")
+            return {}
+            
+        try:
+            from xtquant import xtconstant
+            
+            # Query stock orders
+            orders = self.xt_trader.query_stock_orders(self.acc)
+            
+            result = {}
+            for order in orders:
+                # Map miniQMT status to our status
+                # 50: 已报, 51: 废单, 52: 部成, 53: 已成, 54: 部撤, 55: 已撤, 56: 待报
+                qmt_status = order.order_status
+                status_msg = order.status_msg
+                
+                status = "unknown"
+                if qmt_status in [xtconstant.ORDER_JUNK, xtconstant.ORDER_CANCELED]: # 51, 55
+                    status = "cancelled" # or rejected/failed based on msg
+                    if "废单" in status_msg:
+                        status = "rejected"
+                elif qmt_status == xtconstant.ORDER_SUCCEEDED: # 53
+                    status = "filled"
+                elif qmt_status == xtconstant.ORDER_PART_SUCCEEDED: # 52
+                    status = "partial_filled"
+                elif qmt_status == xtconstant.ORDER_PARTSUCC_CANCEL: # 54
+                    status = "partial_cancelled" 
+                elif qmt_status in [xtconstant.ORDER_REPORTED, xtconstant.ORDER_WAIT_REPORTING]: # 50, 56
+                    status = "submitted"
+                
+                # Convert to standard format
+                order_data = {
+                    "order_id": str(order.order_id),
+                    "symbol": order.stock_code,
+                    "action": "buy" if order.order_type == xtconstant.STOCK_BUY else "sell",
+                    "status": status,
+                    "order_volume": order.order_volume,
+                    "price": order.price,
+                    "filled_qty": order.traded_volume,  # Traded volume
+                    "avg_price": order.traded_price,    # Traded price
+                    "status_msg": status_msg,
+                    "qmt_status": qmt_status,
+                    "created_time": order.order_time,
+                }
+                result[str(order.order_id)] = order_data
+                
+            return result
+            
+        except Exception as e:
+            log.exception("Failed to query orders from miniQMT: %s", e)
+            return {}
+
     def get_execution_status(self) -> Dict[str, Dict[str, Any]]:
         """Get execution status for all tracked orders from miniQMT.
         
-        Note: miniQMT doesn't provide real-time execution status polling.
-        In a real implementation, this would require tracking orders internally
-        and using callbacks (_on_order callback) to update status.
+        This method queries all orders from miniQMT and returns a dictionary
+        mapping broker_order_id to execution status data.
         
-        For now, returns empty dict - real implementation would need to
-        track order status internally using the miniQMT callback system.
+        Returns:
+            Dict of {broker_order_id: {
+                "status": "filled"|"rejected"|"submitted"|...,
+                "filled_size": int,
+                "avg_price": float,
+                "msg": str
+            }}
         """
-        # In a real implementation, this would query pending orders
-        # and return status for each. For now, returning empty dict.
-        # 
-        # The real implementation would need to:
-        # 1. Track orders internally with their miniQMT order IDs
-        # 2. Use miniQMT callbacks to update order status
-        # 3. Return current status when polled
-        return {}
+        if not self.xt_trader:
+            return {}
+            
+        try:
+            # Query latest orders state
+            orders = self.query_orders()
+            
+            result = {}
+            for broker_order_id, order_data in orders.items():
+                result[broker_order_id] = {
+                    "status": order_data["status"],
+                    "filled_size": order_data["filled_qty"],
+                    "avg_price": order_data["avg_price"],
+                    "msg": order_data.get("status_msg", ""),
+                    "raw_status": order_data.get("qmt_status")
+                }
+            
+            if result:
+                log.debug("Got status for %d orders from miniQMT", len(result))
+                
+            return result
+            
+        except Exception as e:
+            log.error("Error getting execution status: %s", e)
+            return {}
     
     def get_account_info(self) -> Dict[str, Any]:
         """Get account metadata information.
