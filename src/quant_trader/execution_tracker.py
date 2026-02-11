@@ -121,8 +121,49 @@ class ExecutionTracker:
                 "updated_at": execution.updated_at,
             })
             
+            
             return False
     
+    def attach_existing_order(self, signal: Dict[str, Any]) -> bool:
+        """Attach an existing submitted order to tracking.
+        
+        Used for resuming order tracking after restart.
+        """
+        order_id = signal.get("order_id")
+        broker_order_id = signal.get("qmt_order_id")
+        
+        if not order_id or not broker_order_id:
+            self.logger.warning("Cannot attach order without order_id or qmt_order_id: %s", signal)
+            return False
+            
+        if order_id in self._pending_executions:
+            self.logger.info("Order %s already tracked, skipping attach", order_id)
+            return True
+            
+        try:
+            # Create execution record
+            execution = ExecutionRecord(
+                order_id=order_id,
+                symbol=signal.get("symbol", ""),
+                action=signal.get("action", ""),
+                size=signal.get("size", 0),
+                target_price=signal.get("price"),
+                broker_order_id=broker_order_id,
+                status=ExecutionStatus.SUBMITTED,
+                updated_at=time.time()
+            )
+            
+            # Add to tracking
+            self._pending_executions[order_id] = execution
+            self._broker_to_order_map[broker_order_id] = order_id
+            
+            self.logger.info("Resumed tracking for order: %s (broker_id=%s)", order_id, broker_order_id)
+            return True
+            
+        except Exception as e:
+            self.logger.error("Failed to attach order %s: %s", order_id, e)
+            return False
+
     def poll_execution_status(self) -> None:
         """Poll for execution status updates from broker."""
         # For now, this is a simplified version

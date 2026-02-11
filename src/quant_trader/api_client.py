@@ -102,9 +102,27 @@ class TraderApiClient:
         except requests.exceptions.HTTPError as e:
             log.error("HTTP error fetching signals: %s - %s", e.response.status_code, e.response.text)
             raise
-        except Exception as e:
             log.error("Failed to fetch signals: %s", e)
             raise
+
+    def get_submitted_signals(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Fetch signals that are in 'submitted' state.
+        
+        Used for resuming order tracking after restart.
+        """
+        try:
+            # Re-use existing endpoint with include_submitted=True
+            all_signals = self.get_pending_signals(limit=limit, include_submitted=True)
+            
+            # Filter client-side for 'submitted' status only
+            submitted = [s for s in all_signals if s.get("status") == "submitted"]
+            
+            log.debug("Found %d submitted signals out of %d total", len(submitted), len(all_signals))
+            return submitted
+            
+        except Exception as e:
+            log.error("Failed to fetch submitted signals: %s", e)
+            return []
 
     def update_signal_status(self, order_id: str, payload: Dict[str, Any]) -> None:
         """Update status of a trade signal.
