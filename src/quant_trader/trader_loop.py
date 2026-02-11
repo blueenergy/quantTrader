@@ -69,6 +69,26 @@ class TraderLoop:
             log.info("Position sync: ENABLED (interval=60s)")
         if self.execution_tracker:
             log.info("Execution tracking: ENABLED")
+            
+            # Resumption logic: Load existing submitted orders
+            try:
+                log.info("Checking for existing submitted orders to resume...")
+                submitted_signals = self.api.get_submitted_signals()
+                if submitted_signals:
+                    log.info("Found %d submitted orders, attempting resume...", len(submitted_signals))
+                    resumed_count = 0
+                    for sig in submitted_signals:
+                        if self.execution_tracker.attach_existing_order(sig):
+                            resumed_count += 1
+                    
+                    if resumed_count > 0:
+                        log.info("✓ Successfully resumed tracking for %d orders", resumed_count)
+                        # Immediately poll to update status
+                        self.execution_tracker.poll_execution_status()
+                else:
+                    log.debug("No existing orders found to resume")
+            except Exception as e:
+                log.error("Failed to resume orders: %s", e)
         
         try:
             while not self._stop:
