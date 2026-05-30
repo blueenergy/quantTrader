@@ -261,6 +261,23 @@ class MiniQMTBroker(BrokerAdapter):
             if not asset:
                 log.warning("No account data returned from miniQMT")
                 return {}
+
+            raw_asset_fields = {}
+            for name in dir(asset):
+                if name.startswith("_"):
+                    continue
+                try:
+                    value = getattr(asset, name)
+                except Exception as exc:
+                    raw_asset_fields[name] = f"<unreadable: {exc}>"
+                    continue
+                if callable(value):
+                    continue
+                if isinstance(value, (str, int, float, bool, type(None))):
+                    raw_asset_fields[name] = value
+                else:
+                    raw_asset_fields[name] = repr(value)
+            log.warning("DEBUG raw miniQMT asset fields: %s", raw_asset_fields)
             
             # Extract account information
             result = {
