@@ -64,19 +64,21 @@ def test_sync_positions_with_metadata():
     # Setup broker positions
     broker.positions = {
         "002050.SZ": {
-            "qty": 1000,
+            "volume": 1000,
             "can_use_volume": 800,
             "frozen_volume": 0,
-            "avg_price": 10.5,
+            "open_price": 10.5,
+            "last_price": 10.5,
             "market_value": 10500.0,
             "on_road_volume": 0,
             "yesterday_volume": 1000,
         },
         "600036.SH": {
-            "qty": 500,
+            "volume": 500,
             "can_use_volume": 500,
             "frozen_volume": 0,
-            "avg_price": 25.0,
+            "open_price": 25.0,
+            "last_price": 25.0,
             "market_value": 12500.0,
             "on_road_volume": 0,
             "yesterday_volume": 500,
@@ -102,14 +104,14 @@ def test_sync_positions_with_metadata():
     
     # Check first position
     pos1 = synced_positions[0]
-    assert pos1["symbol"] == "002050"  # Should strip exchange suffix
+    assert pos1["symbol"] == "002050.SZ"
     assert pos1["qty"] == 1000
     assert pos1["account_id"] == "ACC_X"
     assert pos1["broker"] == "test_broker"
     
     # Check second position
     pos2 = synced_positions[1]
-    assert pos2["symbol"] == "600036"  # Should strip exchange suffix
+    assert pos2["symbol"] == "600036.SH"
     assert pos2["qty"] == 500
     assert pos2["account_id"] == "ACC_X"
     assert pos2["broker"] == "test_broker"
@@ -123,10 +125,11 @@ def test_stale_position_cleanup():
     # Setup broker positions (only one position)
     broker.positions = {
         "002050.SZ": {
-            "qty": 1000,
+            "volume": 1000,
             "can_use_volume": 800,
             "frozen_volume": 0,
-            "avg_price": 10.5,
+            "open_price": 10.5,
+            "last_price": 10.5,
             "market_value": 10500.0,
             "on_road_volume": 0,
             "yesterday_volume": 1000,
@@ -145,7 +148,7 @@ def test_stale_position_cleanup():
     # Verify cleanup was called with current symbols
     assert len(api.cleanup_calls) == 1
     cleanup_call = api.cleanup_calls[0]
-    assert cleanup_call["current_symbols"] == ["002050"]
+    assert cleanup_call["current_symbols"] == ["002050.SZ"]
     assert cleanup_call["account_id"] == "ACC_X"
 
 
