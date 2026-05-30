@@ -6,7 +6,7 @@ Integrates with XtQuant (miniQMT) Python API for real order execution on Windows
 
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from quant_trader.broker_base import BrokerAdapter
 
@@ -363,10 +363,10 @@ class MiniQMTBroker(BrokerAdapter):
 
     def get_execution_status(self) -> Dict[str, Dict[str, Any]]:
         """Get execution status for all tracked orders from miniQMT.
-        
+
         This method queries all orders from miniQMT and returns a dictionary
         mapping broker_order_id to execution status data.
-        
+
         Returns:
             Dict of {broker_order_id: {
                 "status": "filled"|"rejected"|"submitted"|...,

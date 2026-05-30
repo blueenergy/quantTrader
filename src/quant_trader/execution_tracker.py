@@ -43,6 +43,11 @@ class ExecutionRecord:
     updated_at: float = field(default_factory=time.time)
     retry_count: int = 0
     last_error: Optional[str] = None
+    securities_account_id: Optional[str] = None
+    account_id: Optional[str] = None
+    broker: Optional[str] = None
+    mode: str = "live"
+    strategy: Optional[str] = None
 
 
 class ExecutionTracker:
@@ -75,6 +80,11 @@ class ExecutionTracker:
             action=signal.get("action", ""),
             size=signal.get("size", 0),
             target_price=signal.get("price"),
+            securities_account_id=signal.get("securities_account_id"),
+            account_id=signal.get("account_id"),
+            broker=signal.get("broker"),
+            mode=signal.get("mode", "live"),
+            strategy=signal.get("strategy") or signal.get("strategy_id"),
         )
         
         try:
@@ -130,7 +140,7 @@ class ExecutionTracker:
         Used for resuming order tracking after restart.
         """
         order_id = signal.get("order_id")
-        broker_order_id = signal.get("qmt_order_id")
+        broker_order_id = signal.get("qmt_order_id") or signal.get("broker_order_id")
         
         if not order_id or not broker_order_id:
             self.logger.warning("Cannot attach order without order_id or qmt_order_id: %s", signal)
@@ -146,16 +156,23 @@ class ExecutionTracker:
                 order_id=order_id,
                 symbol=signal.get("symbol", ""),
                 action=signal.get("action", ""),
-                size=signal.get("size", 0),
+                size=int(signal.get("size", 0) or 0),
                 target_price=signal.get("price"),
-                broker_order_id=broker_order_id,
-                status=ExecutionStatus.SUBMITTED,
-                updated_at=time.time()
+                filled_price=signal.get("avg_price"),
+                filled_size=int(signal.get("filled_qty", 0) or 0),
+                broker_order_id=str(broker_order_id),
+                status=ExecutionStatus.PARTIAL_FILLED if signal.get("status") == "partial_filled" else ExecutionStatus.SUBMITTED,
+                updated_at=float(signal.get("updated_at") or signal.get("submitted_at") or time.time()),
+                securities_account_id=signal.get("securities_account_id"),
+                account_id=signal.get("account_id"),
+                broker=signal.get("broker"),
+                mode=signal.get("mode", "live"),
+                strategy=signal.get("strategy") or signal.get("strategy_id"),
             )
             
             # Add to tracking
             self._pending_executions[order_id] = execution
-            self._broker_to_order_map[broker_order_id] = order_id
+            self._broker_to_order_map[str(broker_order_id)] = order_id
             
             self.logger.info("Resumed tracking for order: %s (broker_id=%s)", order_id, broker_order_id)
             return True
@@ -175,6 +192,7 @@ class ExecutionTracker:
             broker_executions = self.broker.get_execution_status()
             
             for broker_order_id, broker_status in broker_executions.items():
+                broker_order_id = str(broker_order_id)
                 order_id = self._broker_to_order_map.get(broker_order_id)
                 if not order_id:
                     continue
@@ -205,14 +223,16 @@ class ExecutionTracker:
         """Map broker status to internal execution status."""
         status = broker_status.get('status', '').lower()
         
-        if status in ['filled', 'complete']:
+        if status in ['filled', 'complete', 'filled_all', 'all_traded']:
             return ExecutionStatus.FILLED
-        elif status in ['partial', 'partially_filled']:
+        elif status in ['partial', 'partially_filled', 'partial_filled', 'part_traded']:
             return ExecutionStatus.PARTIAL_FILLED
-        elif status in ['rejected', 'failed']:
+        elif status in ['rejected', 'failed', 'error']:
             return ExecutionStatus.REJECTED
-        elif status in ['cancelled', 'canceled']:
+        elif status in ['cancelled', 'canceled', 'partial_cancelled']:
             return ExecutionStatus.CANCELLED
+        elif status in ['submitted', 'accepted', 'reported', 'pending']:
+            return ExecutionStatus.SUBMITTED
         else:
             return ExecutionStatus.SUBMITTED  # Still processing
     
@@ -231,7 +251,13 @@ class ExecutionTracker:
                 "commission": execution.commission,
                 "status": execution.status.value,
                 "broker_order_id": execution.broker_order_id,
+                "qmt_order_id": execution.broker_order_id,
                 "timestamp": execution.updated_at,
+                "securities_account_id": execution.securities_account_id,
+                "account_id": execution.account_id,
+                "broker": execution.broker,
+                "mode": execution.mode,
+                "strategy": execution.strategy,
             }
             
             # Add any additional broker-specific fields

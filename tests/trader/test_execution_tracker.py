@@ -187,3 +187,42 @@ def test_partial_fill_handling():
     assert execution["status"] in ["partial_filled", "partially_filled"]
     assert execution["filled_size"] == 100
     assert execution["filled_price"] == 10.05
+
+
+def test_attach_existing_order_preserves_live_signal_metadata():
+    """Test restart recovery keeps broker mapping and live signal metadata."""
+    api = FakeApiClient()
+    broker = FakeBroker()
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+
+    signal = {
+        "order_id": "ORDER_RECOVER",
+        "broker_order_id": 987654,
+        "symbol": "000001.SZ",
+        "action": "buy",
+        "size": 300,
+        "price": 12.3,
+        "status": "partial_filled",
+        "filled_qty": 100,
+        "avg_price": 12.1,
+        "submitted_at": 12345.0,
+        "securities_account_id": "SEC123",
+        "account_id": "ACC123",
+        "broker": "miniQMT",
+        "mode": "live",
+        "strategy_id": "portfolio_s1",
+    }
+
+    assert tracker.attach_existing_order(signal) is True
+
+    execution = tracker._pending_executions["ORDER_RECOVER"]
+    assert execution.status == ExecutionStatus.PARTIAL_FILLED
+    assert execution.broker_order_id == "987654"
+    assert execution.filled_size == 100
+    assert execution.filled_price == 12.1
+    assert execution.securities_account_id == "SEC123"
+    assert execution.account_id == "ACC123"
+    assert execution.broker == "miniQMT"
+    assert execution.mode == "live"
+    assert execution.strategy == "portfolio_s1"
+    assert tracker._broker_to_order_map["987654"] == "ORDER_RECOVER"

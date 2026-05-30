@@ -21,6 +21,7 @@ class MockApiClient:
         self.executions = []
         self.position_updates = []
         self.account_syncs = []
+        self.heartbeats = []
     
     def get_pending_signals(self, limit=50, include_submitted=False):
         # Return a test signal
@@ -49,6 +50,10 @@ class MockApiClient:
     def sync_account(self, account_data):
         self.account_syncs.append(account_data)
         return {"status": "success"}
+
+    def record_heartbeat(self, payload):
+        self.heartbeats.append(payload)
+        return {"success": True}
 
 
 class MockBroker:
@@ -234,3 +239,41 @@ def test_trader_loop_without_execution_tracking():
     execution = api.executions[0]
     assert execution["order_id"] == "ORDER_1"
     assert execution["status"] == "filled"  # Should be filled immediately
+
+
+def test_trader_loop_records_heartbeat_with_rate_limit(monkeypatch):
+    """Test heartbeat payload and 30-second rate limiting."""
+    cfg = TraderConfig(
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0
+    )
+
+    api = MockApiClient()
+    broker = MockBroker()
+
+    loop = TraderLoop(
+        cfg=cfg,
+        api=api,
+        broker=broker,
+        enable_execution_tracking=True,
+        enable_position_sync=True
+    )
+
+    monkeypatch.setattr("quant_trader.trader_loop.time.time", lambda: 1000.0)
+    loop._record_heartbeat()
+    loop._record_heartbeat()
+
+    assert len(api.heartbeats) == 1
+    heartbeat = api.heartbeats[0]
+    assert heartbeat["status"] == "running"
+    assert heartbeat["broker"] == "MockBroker"
+    assert heartbeat["api_base_url"] == "http://test:8000"
+    assert heartbeat["pending_execution_count"] == 0
+    assert heartbeat["last_signal_poll_at"] == 1000.0
+    assert heartbeat["account_id"] == "ACC_X"
+
+    monkeypatch.setattr("quant_trader.trader_loop.time.time", lambda: 1031.0)
+    loop._record_heartbeat()
+    assert len(api.heartbeats) == 2

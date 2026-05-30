@@ -102,24 +102,25 @@ class TraderApiClient:
         except requests.exceptions.HTTPError as e:
             log.error("HTTP error fetching signals: %s - %s", e.response.status_code, e.response.text)
             raise
+        except Exception as e:
             log.error("Failed to fetch signals: %s", e)
             raise
 
     def get_submitted_signals(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """Fetch signals that are in 'submitted' state.
-        
+        """Fetch signals that need execution tracking after restart.
+
         Used for resuming order tracking after restart.
         """
         try:
             # Re-use existing endpoint with include_submitted=True
             all_signals = self.get_pending_signals(limit=limit, include_submitted=True)
-            
-            # Filter client-side for 'submitted' status only
-            submitted = [s for s in all_signals if s.get("status") == "submitted"]
-            
+
+            # Filter client-side for broker-submitted lifecycle statuses.
+            submitted = [s for s in all_signals if s.get("status") in {"submitted", "partial_filled"}]
+
             log.debug("Found %d submitted signals out of %d total", len(submitted), len(all_signals))
             return submitted
-            
+
         except Exception as e:
             log.error("Failed to fetch submitted signals: %s", e)
             return []
@@ -153,6 +154,20 @@ class TraderApiClient:
             timeout=10,
         )
         resp.raise_for_status()
+
+    def record_heartbeat(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Publish quantTrader liveness and sync metadata to backend."""
+
+        heartbeat = {
+            "securities_account_id": self.securities_account_id,
+            **payload,
+        }
+        return self._request(
+            "POST",
+            "/trader/heartbeat",
+            json=heartbeat,
+            timeout=5,
+        )
     
     def sync_positions(self, positions: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Sync positions to backend.

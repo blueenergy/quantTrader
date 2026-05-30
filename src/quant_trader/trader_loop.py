@@ -47,6 +47,7 @@ class TraderLoop:
                 broker=broker
             )
             log.info("Execution tracking ENABLED")
+        self._last_heartbeat = 0.0
         
         # Enhanced position manager with metadata
         self.position_manager: Optional[EnhancedPositionManager] = None
@@ -69,7 +70,7 @@ class TraderLoop:
             log.info("Position sync: ENABLED (interval=60s)")
         if self.execution_tracker:
             log.info("Execution tracking: ENABLED")
-            
+
             # Resumption logic: Load existing submitted orders
             try:
                 log.info("Checking for existing submitted orders to resume...")
@@ -127,7 +128,9 @@ class TraderLoop:
                     # Poll execution status if enabled
                     if self.execution_tracker:
                         self.execution_tracker.poll_execution_status()
-                        
+
+                    self._record_heartbeat()
+
                 except Exception as e:  # noqa: BLE001
                     log.exception("Error in main loop: %s", e)
 
@@ -139,6 +142,23 @@ class TraderLoop:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    def _record_heartbeat(self) -> None:
+        now = time.time()
+        if now - self._last_heartbeat < 30:
+            return
+        self._last_heartbeat = now
+        try:
+            self.api.record_heartbeat({
+                "status": "running",
+                "broker": type(self.broker).__name__,
+                "api_base_url": self.cfg.api_base_url,
+                "pending_execution_count": self.execution_tracker.get_pending_count() if self.execution_tracker else 0,
+                "last_signal_poll_at": now,
+                "account_id": getattr(self.position_manager, "account_id", None) if self.position_manager else None,
+            })
+        except Exception as exc:  # noqa: BLE001
+            log.debug("Failed to record quantTrader heartbeat: %s", exc)
+
     def _handle_signal(self, sig: Dict[str, Any]) -> None:
         order_id = sig.get("order_id")
         symbol = sig.get("symbol")
