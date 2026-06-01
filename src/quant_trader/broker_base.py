@@ -75,6 +75,15 @@ class BrokerAdapter(ABC):
         queries should return an empty dict.
         """
         return {}
+
+    def cancel_order(self, broker_order_id: str) -> bool:
+        """Cancel an outstanding broker order if supported.
+
+        Implementations should return True only when the cancel request was
+        accepted by the broker. The final cancel/fill state still comes from
+        get_execution_status().
+        """
+        return False
     
     def get_account_info(self) -> Dict[str, Any]:
         """Get account metadata information.

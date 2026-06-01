@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .api_client import TraderApiClient
 from .broker_base import BrokerAdapter
@@ -95,6 +95,7 @@ class TraderLoop:
             while not self._stop:
                 try:
                     # Sync positions periodically
+                    account = None
                     if self.position_manager:
                         positions = self.position_manager.sync_positions()
                         account = self.position_manager.sync_account()
@@ -122,9 +123,19 @@ class TraderLoop:
                     else:
                         log.debug("No pending signals found")
                     
-                    for sig in signals:
-                        self._handle_signal(sig)
-                        
+                    sell_signals, buy_signals = self._split_ordered_signals(signals)
+                    for sig in sell_signals:
+                        self._handle_signal(sig, account=account)
+
+                    # Let sell fills update before gated buys are considered.
+                    if sell_signals and self.execution_tracker:
+                        self.execution_tracker.poll_execution_status()
+                    if sell_signals and self.position_manager:
+                        account = self.position_manager.sync_account(force=True)
+
+                    for sig in buy_signals:
+                        self._handle_signal(sig, account=account)
+
                     # Poll execution status if enabled
                     if self.execution_tracker:
                         self.execution_tracker.poll_execution_status()
@@ -159,7 +170,25 @@ class TraderLoop:
         except Exception as exc:  # noqa: BLE001
             log.debug("Failed to record quantTrader heartbeat: %s", exc)
 
-    def _handle_signal(self, sig: Dict[str, Any]) -> None:
+    def _split_ordered_signals(self, signals: List[Dict[str, Any]]) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        ordered = sorted(signals, key=self._signal_sort_key)
+        sell_signals = [sig for sig in ordered if self._signal_phase(sig) == "sell"]
+        buy_signals = [sig for sig in ordered if self._signal_phase(sig) != "sell"]
+        return sell_signals, buy_signals
+
+    def _signal_sort_key(self, sig: Dict[str, Any]) -> tuple:
+        phase_rank = 0 if self._signal_phase(sig) == "sell" else 1
+        return (
+            phase_rank,
+            int(sig.get("execution_priority", 1000) or 1000),
+            float(sig.get("timestamp", 0) or 0),
+            str(sig.get("order_id") or ""),
+        )
+
+    def _signal_phase(self, sig: Dict[str, Any]) -> str:
+        return str(sig.get("execution_phase") or sig.get("action") or "").lower()
+
+    def _handle_signal(self, sig: Dict[str, Any], account: Optional[Dict[str, Any]] = None) -> None:
         order_id = sig.get("order_id")
         symbol = sig.get("symbol")
         action = sig.get("action")
@@ -170,6 +199,11 @@ class TraderLoop:
         
         if not order_id:
             log.warning("Skip signal without order_id: %s", sig)
+            return
+        if self.execution_tracker and self.execution_tracker.is_tracking(order_id):
+            log.info("Skip already tracked signal: %s", order_id)
+            return
+        if not self._passes_execution_gates(sig, account):
             return
 
         # Use execution tracker for proper lifecycle management
@@ -246,3 +280,84 @@ class TraderLoop:
                     log.info("Marked signal as retry_pending: %s", order_id)
                 except Exception:  # noqa: BLE001
                     log.exception("Failed to update signal status for %s", order_id)
+
+    def _passes_execution_gates(self, sig: Dict[str, Any], account: Optional[Dict[str, Any]]) -> bool:
+        action = str(sig.get("action") or "").lower()
+        if action == "sell":
+            return self._passes_sell_position_gate(sig)
+        if action == "buy":
+            return self._passes_buy_cash_gate(sig, account)
+        return True
+
+    def _passes_sell_position_gate(self, sig: Dict[str, Any]) -> bool:
+        try:
+            positions = self.broker.query_positions()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Unable to query positions before sell: %s", exc)
+            self._mark_signal_retry(sig, "position_query_failed")
+            return False
+        if not positions:
+            self._mark_signal_retry(sig, "position_unavailable")
+            return False
+        symbol = str(sig.get("symbol") or "")
+        position = self._position_for_symbol(positions, symbol)
+        available_qty = int((position or {}).get("can_use_volume") or (position or {}).get("volume") or 0)
+        required_qty = int(sig.get("size", 0) or 0)
+        if available_qty < required_qty:
+            self._mark_signal_rejected(sig, f"insufficient_available_position available={available_qty} required={required_qty}")
+            return False
+        return True
+
+    def _passes_buy_cash_gate(self, sig: Dict[str, Any], account: Optional[Dict[str, Any]]) -> bool:
+        if not account:
+            return True
+        available_cash = float(account.get("available_cash") or account.get("cash") or 0)
+        estimated_amount = self._estimated_signal_amount(sig)
+        if estimated_amount <= 0:
+            self._mark_signal_retry(sig, "missing_buy_price_for_cash_check")
+            return False
+        if estimated_amount > 0 and available_cash < estimated_amount:
+            self._mark_signal_retry(sig, f"waiting_for_cash available={available_cash:.2f} required={estimated_amount:.2f}")
+            return False
+        return True
+
+    @staticmethod
+    def _position_for_symbol(positions: Dict[str, Dict[str, Any]], symbol: str) -> Optional[Dict[str, Any]]:
+        if symbol in positions:
+            return positions[symbol]
+        base = symbol.split(".", 1)[0]
+        for candidate, position in positions.items():
+            if str(candidate).split(".", 1)[0] == base:
+                return position
+        return None
+
+    @staticmethod
+    def _estimated_signal_amount(sig: Dict[str, Any]) -> float:
+        try:
+            size = int(sig.get("size", 0) or 0)
+            price = float(sig.get("effective_limit_price") or sig.get("price") or sig.get("reference_price") or 0)
+            return abs(size * price)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _mark_signal_retry(self, sig: Dict[str, Any], reason: str) -> None:
+        order_id = sig.get("order_id")
+        if not order_id:
+            return
+        log.info("Signal waits for retry: order_id=%s reason=%s", order_id, reason)
+        self.api.update_signal_status(order_id, {
+            "status": "retry_pending",
+            "last_error": reason,
+            "updated_at": time.time(),
+        })
+
+    def _mark_signal_rejected(self, sig: Dict[str, Any], reason: str) -> None:
+        order_id = sig.get("order_id")
+        if not order_id:
+            return
+        log.warning("Signal rejected before broker submission: order_id=%s reason=%s", order_id, reason)
+        self.api.update_signal_status(order_id, {
+            "status": "rejected",
+            "last_error": reason,
+            "updated_at": time.time(),
+        })

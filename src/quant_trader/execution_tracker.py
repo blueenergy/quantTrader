@@ -8,10 +8,13 @@ import logging
 import time
 from typing import Dict, Any, Optional
 from dataclasses import dataclass, field
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from enum import Enum
 
 from .api_client import TraderApiClient
 from .broker_base import BrokerAdapter
+
+PRICE_TICK = Decimal("0.01")
 
 
 class ExecutionStatus(Enum):
@@ -20,6 +23,7 @@ class ExecutionStatus(Enum):
     SUBMITTED = "submitted"
     FILLED = "filled"
     PARTIAL_FILLED = "partial_filled"
+    PARTIAL_CANCELLED = "partial_cancelled"
     REJECTED = "rejected"
     CANCELLED = "cancelled"
     FAILED = "failed"
@@ -48,6 +52,17 @@ class ExecutionRecord:
     broker: Optional[str] = None
     mode: str = "live"
     strategy: Optional[str] = None
+    execution_phase: Optional[str] = None
+    execution_priority: int = 1000
+    plan_item_rank: Optional[int] = None
+    reference_price: Optional[float] = None
+    max_slippage_bps: int = 100
+    price_floor: Optional[float] = None
+    price_ceiling: Optional[float] = None
+    effective_limit_price: Optional[float] = None
+    valid_until: Optional[float] = None
+    last_status_change_at: float = field(default_factory=time.time)
+    cancel_requested_at: Optional[float] = None
 
 
 class ExecutionTracker:
@@ -65,6 +80,7 @@ class ExecutionTracker:
         # Configuration
         self.max_retries = 3
         self.retry_delay = 5.0
+        self.order_timeout_seconds = 90.0
     
     def submit_order(self, signal: Dict[str, Any]) -> bool:
         """Submit an order and track its execution lifecycle."""
@@ -73,18 +89,39 @@ class ExecutionTracker:
             self.logger.error("Signal missing order_id: %s", signal)
             return False
         
+        try:
+            signal = self._prepare_signal_for_submission(signal)
+        except Exception as e:
+            self.logger.error("Signal %s failed execution guard: %s", order_id, e)
+            self.api_client.update_signal_status(order_id, {
+                "status": "retry_pending",
+                "retry_count": int(signal.get("retry_count", 0) or 0) + 1,
+                "last_error": str(e),
+                "updated_at": time.time(),
+            })
+            return False
+
         # Create execution record
         execution = ExecutionRecord(
             order_id=order_id,
             symbol=signal.get("symbol", ""),
             action=signal.get("action", ""),
-            size=signal.get("size", 0),
+            size=int(signal.get("size", 0) or 0),
             target_price=signal.get("price"),
             securities_account_id=signal.get("securities_account_id"),
             account_id=signal.get("account_id"),
             broker=signal.get("broker"),
             mode=signal.get("mode", "live"),
             strategy=signal.get("strategy") or signal.get("strategy_id"),
+            execution_phase=signal.get("execution_phase"),
+            execution_priority=int(signal.get("execution_priority", 1000) or 1000),
+            plan_item_rank=signal.get("plan_item_rank"),
+            reference_price=signal.get("reference_price"),
+            max_slippage_bps=int(signal.get("max_slippage_bps", 100) or 100),
+            price_floor=signal.get("price_floor"),
+            price_ceiling=signal.get("price_ceiling"),
+            effective_limit_price=signal.get("effective_limit_price"),
+            valid_until=self._timestamp_or_none(signal.get("valid_until")),
         )
         
         try:
@@ -108,6 +145,8 @@ class ExecutionTracker:
                 "status": "submitted",
                 "qmt_order_id": broker_order_id,
                 "submitted_at": execution.updated_at,
+                "effective_limit_price": execution.effective_limit_price,
+                "execution_phase": execution.execution_phase,
             })
             
             self.logger.info("Order submitted: %s -> %s", order_id, broker_order_id)
@@ -168,6 +207,15 @@ class ExecutionTracker:
                 broker=signal.get("broker"),
                 mode=signal.get("mode", "live"),
                 strategy=signal.get("strategy") or signal.get("strategy_id"),
+                execution_phase=signal.get("execution_phase") or signal.get("action"),
+                execution_priority=int(signal.get("execution_priority", 1000) or 1000),
+                plan_item_rank=signal.get("plan_item_rank"),
+                reference_price=signal.get("reference_price"),
+                max_slippage_bps=int(signal.get("max_slippage_bps", 100) or 100),
+                price_floor=signal.get("price_floor"),
+                price_ceiling=signal.get("price_ceiling"),
+                effective_limit_price=signal.get("effective_limit_price"),
+                valid_until=self._timestamp_or_none(signal.get("valid_until")),
             )
             
             # Add to tracking
@@ -203,6 +251,8 @@ class ExecutionTracker:
                 
                 # Update execution based on broker status
                 new_status = self._map_broker_status(broker_status)
+                if new_status != execution.status:
+                    execution.last_status_change_at = time.time()
                 execution.status = new_status
                 execution.filled_size = broker_status.get('filled_size', 0)
                 execution.filled_price = broker_status.get('avg_price')
@@ -212,12 +262,111 @@ class ExecutionTracker:
                 self._update_execution_in_backend(execution, broker_status)
                 
                 # If order is completed, remove from pending
-                if new_status in [ExecutionStatus.FILLED, ExecutionStatus.REJECTED, 
-                                 ExecutionStatus.CANCELLED, ExecutionStatus.FAILED]:
+                if new_status in [ExecutionStatus.FILLED, ExecutionStatus.REJECTED,
+                                 ExecutionStatus.CANCELLED, ExecutionStatus.PARTIAL_CANCELLED, ExecutionStatus.FAILED]:
                     self._complete_execution(order_id)
+
+            self._cancel_expired_sell_orders()
                     
         except Exception as e:
             self.logger.error("Error polling execution status: %s", e)
+
+    def is_tracking(self, order_id: str) -> bool:
+        """Return True when the order is already being tracked locally."""
+        return str(order_id) in self._pending_executions
+
+    def _prepare_signal_for_submission(self, signal: Dict[str, Any]) -> Dict[str, Any]:
+        """Apply execution guards before the broker sees the signal."""
+        prepared = dict(signal)
+        action = str(prepared.get("action") or "").lower()
+        reference_price = self._float_or_none(prepared.get("reference_price") or prepared.get("price"))
+        max_slippage_bps = int(prepared.get("max_slippage_bps", 100) or 100)
+
+        if action == "sell":
+            if reference_price is None or reference_price <= 0:
+                raise ValueError("missing_reference_price")
+            price_floor = self._float_or_none(prepared.get("price_floor"))
+            computed_floor = self._protected_limit_price(reference_price, max_slippage_bps, action="sell")
+            effective_limit_price = self._float_or_none(prepared.get("effective_limit_price"))
+            if effective_limit_price is None:
+                effective_limit_price = max(price_floor or 0, computed_floor)
+            prepared["reference_price"] = reference_price
+            prepared["price_floor"] = self._round_price_to_tick(price_floor if price_floor is not None else computed_floor, action="sell")
+            prepared["effective_limit_price"] = self._round_price_to_tick(effective_limit_price, action="sell")
+            prepared["price"] = prepared["effective_limit_price"]
+            prepared["order_type"] = "limit"
+        elif action == "buy":
+            price_ceiling = self._float_or_none(prepared.get("price_ceiling") or prepared.get("effective_limit_price"))
+            if price_ceiling is not None:
+                prepared["effective_limit_price"] = self._round_price_to_tick(price_ceiling, action="buy")
+                prepared["price"] = prepared["effective_limit_price"]
+                prepared["order_type"] = "limit"
+        return prepared
+
+    def _cancel_expired_sell_orders(self) -> None:
+        now = time.time()
+        for order_id, execution in list(self._pending_executions.items()):
+            if str(execution.action).lower() != "sell":
+                continue
+            if execution.status not in {ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIAL_FILLED}:
+                continue
+            if execution.cancel_requested_at:
+                continue
+            expires_at = execution.valid_until or (execution.created_at + self.order_timeout_seconds)
+            if now < expires_at:
+                continue
+            if not execution.broker_order_id:
+                continue
+            if not self.broker.cancel_order(execution.broker_order_id):
+                self.logger.warning("Sell order expired but broker cancel was not accepted: %s", order_id)
+                continue
+            execution.cancel_requested_at = now
+            execution.updated_at = now
+            self.api_client.update_signal_status(order_id, {
+                "status": "retry_pending",
+                "last_error": "sell_order_expired_cancel_requested",
+                "cancel_requested_at": now,
+                "filled_qty": execution.filled_size,
+                "avg_price": execution.filled_price,
+            })
+
+    @staticmethod
+    def _float_or_none(value: Any) -> Optional[float]:
+        try:
+            if value is None or value == "":
+                return None
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _round_price_to_tick(price: float, *, action: str) -> float:
+        decimal_price = Decimal(str(price))
+        rounding = ROUND_FLOOR if action == "sell" else ROUND_CEILING
+        return float(decimal_price.quantize(PRICE_TICK, rounding=rounding))
+
+    @staticmethod
+    def _protected_limit_price(reference_price: float, max_slippage_bps: int, *, action: str) -> float:
+        reference = Decimal(str(reference_price))
+        slippage = Decimal(int(max_slippage_bps)) / Decimal("10000")
+        multiplier = Decimal("1") - slippage if action == "sell" else Decimal("1") + slippage
+        rounding = ROUND_FLOOR if action == "sell" else ROUND_CEILING
+        return float((reference * multiplier).quantize(PRICE_TICK, rounding=rounding))
+
+    @staticmethod
+    def _timestamp_or_none(value: Any) -> Optional[float]:
+        if value is None or value == "":
+            return None
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str):
+            try:
+                from datetime import datetime
+
+                return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+            except ValueError:
+                return None
+        return None
     
     def _map_broker_status(self, broker_status: Dict[str, Any]) -> ExecutionStatus:
         """Map broker status to internal execution status."""
@@ -229,7 +378,9 @@ class ExecutionTracker:
             return ExecutionStatus.PARTIAL_FILLED
         elif status in ['rejected', 'failed', 'error']:
             return ExecutionStatus.REJECTED
-        elif status in ['cancelled', 'canceled', 'partial_cancelled']:
+        elif status in ['partial_cancelled']:
+            return ExecutionStatus.PARTIAL_CANCELLED
+        elif status in ['cancelled', 'canceled']:
             return ExecutionStatus.CANCELLED
         elif status in ['submitted', 'accepted', 'reported', 'pending']:
             return ExecutionStatus.SUBMITTED
@@ -258,6 +409,14 @@ class ExecutionTracker:
                 "broker": execution.broker,
                 "mode": execution.mode,
                 "strategy": execution.strategy,
+                "execution_phase": execution.execution_phase,
+                "execution_priority": execution.execution_priority,
+                "plan_item_rank": execution.plan_item_rank,
+                "reference_price": execution.reference_price,
+                "max_slippage_bps": execution.max_slippage_bps,
+                "price_floor": execution.price_floor,
+                "price_ceiling": execution.price_ceiling,
+                "effective_limit_price": execution.effective_limit_price,
             }
             
             # Add any additional broker-specific fields
@@ -273,11 +432,12 @@ class ExecutionTracker:
                 "status": execution.status.value,
                 "filled_qty": execution.filled_size,
                 "avg_price": execution.filled_price,
+                "effective_limit_price": execution.effective_limit_price,
                 "updated_at": execution.updated_at,
             }
             
-            if execution.status in [ExecutionStatus.FILLED, ExecutionStatus.REJECTED, 
-                                   ExecutionStatus.CANCELLED, ExecutionStatus.FAILED]:
+            if execution.status in [ExecutionStatus.FILLED, ExecutionStatus.REJECTED,
+                                   ExecutionStatus.CANCELLED, ExecutionStatus.PARTIAL_CANCELLED, ExecutionStatus.FAILED]:
                 signal_update["executed_at"] = execution.updated_at
             
             self.api_client.update_signal_status(execution.order_id, signal_update)

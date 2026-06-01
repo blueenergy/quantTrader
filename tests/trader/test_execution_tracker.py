@@ -50,6 +50,9 @@ class FakeBroker:
     def get_account_info(self):
         return self.account_info
 
+    def cancel_order(self, broker_order_id):
+        return True
+
 
 def test_submit_order_success():
     """Test successful order submission."""
@@ -226,3 +229,113 @@ def test_attach_existing_order_preserves_live_signal_metadata():
     assert execution.mode == "live"
     assert execution.strategy == "portfolio_s1"
     assert tracker._broker_to_order_map["987654"] == "ORDER_RECOVER"
+
+
+def test_sell_order_uses_protected_limit_price():
+    api = FakeApiClient()
+    broker = FakeBroker()
+    captured = {}
+
+    def place_order(signal):
+        captured.update(signal)
+        return "BROKER_SELL"
+
+    broker.place_order = place_order
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+
+    signal = {
+        "order_id": "ORDER_SELL",
+        "symbol": "000001",
+        "action": "sell",
+        "size": 100,
+        "reference_price": 10.0,
+        "max_slippage_bps": 50,
+    }
+
+    assert tracker.submit_order(signal) is True
+    assert captured["order_type"] == "limit"
+    assert captured["price"] == 9.95
+    assert captured["effective_limit_price"] == 9.95
+    assert api.signal_updates[0]["payload"]["effective_limit_price"] == 9.95
+
+
+def test_protected_prices_are_rounded_to_tick():
+    api = FakeApiClient()
+    broker = FakeBroker()
+    captured = {}
+
+    def place_order(signal):
+        captured[signal["order_id"]] = dict(signal)
+        return f"BROKER_{signal['order_id']}"
+
+    broker.place_order = place_order
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+
+    assert tracker.submit_order(
+        {
+            "order_id": "ORDER_SELL_TICK",
+            "symbol": "000001",
+            "action": "sell",
+            "size": 100,
+            "reference_price": 10.005,
+            "max_slippage_bps": 50,
+        }
+    )
+    assert tracker.submit_order(
+        {
+            "order_id": "ORDER_BUY_TICK",
+            "symbol": "000001",
+            "action": "buy",
+            "size": 100,
+            "price_ceiling": 10.055,
+        }
+    )
+
+    assert captured["ORDER_SELL_TICK"]["effective_limit_price"] == 9.95
+    assert captured["ORDER_BUY_TICK"]["effective_limit_price"] == 10.06
+
+
+def test_sell_order_without_reference_price_is_not_submitted():
+    api = FakeApiClient()
+    broker = FakeBroker()
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+
+    signal = {
+        "order_id": "ORDER_NO_REF",
+        "symbol": "000001",
+        "action": "sell",
+        "size": 100,
+    }
+
+    assert tracker.submit_order(signal) is False
+    assert broker.placed_orders == []
+    assert api.signal_updates[0]["payload"]["status"] == "retry_pending"
+    assert api.signal_updates[0]["payload"]["last_error"] == "missing_reference_price"
+
+
+def test_expired_sell_order_requests_cancel():
+    api = FakeApiClient()
+    broker = FakeBroker()
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+    tracker.submit_order(
+        {
+            "order_id": "ORDER_EXPIRE",
+            "symbol": "000001",
+            "action": "sell",
+            "size": 100,
+            "reference_price": 10.0,
+            "valid_until": 1,
+        }
+    )
+    broker.execution_responses = {
+        "BROKER_ORDER_EXPIRE": {
+            "status": "submitted",
+            "filled_size": 0,
+            "avg_price": None,
+        }
+    }
+
+    tracker.poll_execution_status()
+
+    assert api.signal_updates[-1]["payload"]["status"] == "retry_pending"
+    assert api.signal_updates[-1]["payload"]["last_error"] == "sell_order_expired_cancel_requested"

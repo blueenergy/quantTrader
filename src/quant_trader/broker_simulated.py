@@ -16,6 +16,9 @@ class SimulatedBroker(BrokerAdapter):
     suitable for verifying the end-to-end REST integration safely.
     """
 
+    def __init__(self) -> None:
+        self._orders: Dict[str, Dict[str, Any]] = {}
+
     def place_order(self, signal: Dict[str, Any]) -> str:
         order_id = signal.get("order_id")
         symbol = signal.get("symbol")
@@ -36,16 +39,28 @@ class SimulatedBroker(BrokerAdapter):
         time.sleep(0.1)
 
         # Fake broker order id
-        broker_order_id = f"SIM-{int(time.time())}"
+        broker_order_id = f"SIM-{int(time.time() * 1000)}"
+        self._orders[broker_order_id] = {
+            "status": "filled",
+            "filled_size": int(size or 0),
+            "avg_price": float(price or signal.get("effective_limit_price") or 0),
+            "commission": 0.0,
+        }
         return broker_order_id
 
     def get_execution_status(self) -> Dict[str, Dict[str, Any]]:
         """Get execution status for all tracked orders from simulated broker.
         
-        In simulated mode, we could implement basic execution simulation.
-        For now, returns empty dict.
+        In simulated mode, orders are filled immediately after placement.
         """
-        return {}
+        return dict(self._orders)
+
+    def cancel_order(self, broker_order_id: str) -> bool:
+        order = self._orders.get(str(broker_order_id))
+        if not order:
+            return False
+        order["status"] = "cancelled"
+        return True
     
     def get_account_info(self) -> Dict[str, Any]:
         """Get account metadata information for simulated broker.

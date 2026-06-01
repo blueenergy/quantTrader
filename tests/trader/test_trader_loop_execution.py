@@ -71,6 +71,17 @@ class MockBroker:
         order_id = f"BROKER_{signal.get('order_id', '1')}"
         self.placed_orders.append(order_id)
         return order_id
+
+    def query_positions(self):
+        return self.positions
+
+    def query_account(self):
+        return {
+            "available_cash": 100000,
+            "cash": 100000,
+            "total_asset": 100000,
+            "market_value": 0,
+        }
     
     def get_positions(self):
         return self.positions
@@ -277,3 +288,66 @@ def test_trader_loop_records_heartbeat_with_rate_limit(monkeypatch):
     monkeypatch.setattr("quant_trader.trader_loop.time.time", lambda: 1031.0)
     loop._record_heartbeat()
     assert len(api.heartbeats) == 2
+
+
+def test_trader_loop_orders_sells_before_buys():
+    cfg = TraderConfig(
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0
+    )
+    api = MockApiClient()
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=False, enable_position_sync=False)
+
+    sell_signals, buy_signals = loop._split_ordered_signals([
+        {"order_id": "BUY_1", "action": "buy", "execution_priority": 1, "timestamp": 1},
+        {"order_id": "SELL_1", "action": "sell", "execution_priority": 5, "timestamp": 2},
+        {"order_id": "SELL_0", "action": "sell", "execution_priority": 1, "timestamp": 3},
+    ])
+
+    assert [sig["order_id"] for sig in sell_signals] == ["SELL_0", "SELL_1"]
+    assert [sig["order_id"] for sig in buy_signals] == ["BUY_1"]
+
+
+def test_trader_loop_cash_gates_buy_orders():
+    cfg = TraderConfig(
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0
+    )
+    api = MockApiClient()
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=True, enable_position_sync=False)
+
+    loop._handle_signal(
+        {"order_id": "BUY_BIG", "symbol": "000001", "action": "buy", "size": 1000, "price": 20.0},
+        account={"available_cash": 1000},
+    )
+
+    assert broker.placed_orders == []
+    assert api.signal_updates[0]["payload"]["status"] == "retry_pending"
+    assert "waiting_for_cash" in api.signal_updates[0]["payload"]["last_error"]
+
+
+def test_trader_loop_retries_buy_without_price_for_cash_check():
+    cfg = TraderConfig(
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0
+    )
+    api = MockApiClient()
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=True, enable_position_sync=False)
+
+    loop._handle_signal(
+        {"order_id": "BUY_NO_PRICE", "symbol": "000001", "action": "buy", "size": 1000},
+        account={"available_cash": 100000},
+    )
+
+    assert broker.placed_orders == []
+    assert api.signal_updates[0]["payload"]["status"] == "retry_pending"
+    assert api.signal_updates[0]["payload"]["last_error"] == "missing_buy_price_for_cash_check"

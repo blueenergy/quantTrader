@@ -110,7 +110,10 @@ class MiniQMTBroker(BrokerAdapter):
         symbol = signal.get("symbol")
         action = signal.get("action")
         size = signal.get("size")
-        price = signal.get("price")
+        price = signal.get("effective_limit_price")
+        if price is None:
+            price = signal.get("price")
+        order_type_value = str(signal.get("order_type") or "").lower()
         
         if not all([symbol, action, size]):
             raise ValueError(f"Invalid signal: missing required fields. signal={signal}")
@@ -136,7 +139,7 @@ class MiniQMTBroker(BrokerAdapter):
             raise ValueError(f"Invalid action: {action}. Must be BUY or SELL")
 
         # order_type: 价格类型（市价 / 限价）
-        if price is None:
+        if price is None or order_type_value == "market":
             # 市价单
             order_type = xtconstant.MARKET_PEER_PRICE_FIRST
             price_val = 0.0
@@ -171,6 +174,24 @@ class MiniQMTBroker(BrokerAdapter):
         except Exception as e:
             log.exception("Failed to place order via miniQMT: %s", e)
             raise RuntimeError(f"miniQMT order failed: {e}") from e
+
+    def cancel_order(self, broker_order_id: str) -> bool:
+        """Cancel an outstanding miniQMT order."""
+        if not self.xt_trader or not self.acc:
+            log.warning("miniQMT not connected, cannot cancel order")
+            return False
+        try:
+            order_id = int(broker_order_id)
+            cancel_fn = getattr(self.xt_trader, "cancel_order_stock", None) or getattr(self.xt_trader, "cancel_order", None)
+            if not cancel_fn:
+                log.warning("miniQMT cancel API is not available")
+                return False
+            result = cancel_fn(self.acc, order_id)
+            log.info("miniQMT cancel requested: broker_order_id=%s result=%s", broker_order_id, result)
+            return result == 0 or result is True
+        except Exception as e:
+            log.exception("Failed to cancel miniQMT order %s: %s", broker_order_id, e)
+            return False
     
     def query_positions(self) -> Dict[str, Dict[str, Any]]:
         """Query current positions from miniQMT.
