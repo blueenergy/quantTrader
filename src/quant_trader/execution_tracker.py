@@ -21,6 +21,7 @@ class ExecutionStatus(Enum):
     """Execution status enum to match the backend system."""
     PENDING = "pending"
     SUBMITTED = "submitted"
+    CANCEL_REQUESTED = "cancel_requested"
     FILLED = "filled"
     PARTIAL_FILLED = "partial_filled"
     PARTIAL_CANCELLED = "partial_cancelled"
@@ -200,7 +201,7 @@ class ExecutionTracker:
                 filled_price=signal.get("avg_price"),
                 filled_size=int(signal.get("filled_qty", 0) or 0),
                 broker_order_id=str(broker_order_id),
-                status=ExecutionStatus.PARTIAL_FILLED if signal.get("status") == "partial_filled" else ExecutionStatus.SUBMITTED,
+                status=self._status_from_signal(signal.get("status")),
                 updated_at=float(signal.get("updated_at") or signal.get("submitted_at") or time.time()),
                 securities_account_id=signal.get("securities_account_id"),
                 account_id=signal.get("account_id"),
@@ -322,13 +323,40 @@ class ExecutionTracker:
                 continue
             execution.cancel_requested_at = now
             execution.updated_at = now
+            execution.status = ExecutionStatus.CANCEL_REQUESTED
+            remaining_size = self._remaining_size(execution)
+            chase_suggestion = self._build_chase_suggestion(execution, remaining_size)
             self.api_client.update_signal_status(order_id, {
-                "status": "retry_pending",
+                "status": ExecutionStatus.CANCEL_REQUESTED.value,
                 "last_error": "sell_order_expired_cancel_requested",
                 "cancel_requested_at": now,
                 "filled_qty": execution.filled_size,
                 "avg_price": execution.filled_price,
+                "remaining_size": remaining_size,
+                "chase_suggestion": chase_suggestion,
             })
+
+    @staticmethod
+    def _remaining_size(execution: ExecutionRecord) -> int:
+        return max(0, int(execution.size or 0) - int(execution.filled_size or 0))
+
+    def _build_chase_suggestion(self, execution: ExecutionRecord, remaining_size: Optional[int] = None) -> Dict[str, Any]:
+        remaining = self._remaining_size(execution) if remaining_size is None else remaining_size
+        next_slippage_bps = int(execution.max_slippage_bps or 100) + 30
+        reference_price = execution.reference_price or execution.effective_limit_price or execution.target_price
+        suggested_price = None
+        if reference_price:
+            suggested_price = self._protected_limit_price(reference_price, next_slippage_bps, action="sell")
+        return {
+            "mode": "manual_review",
+            "reason": "sell_order_expired",
+            "remaining_size": remaining,
+            "reference_price": reference_price,
+            "current_limit_price": execution.effective_limit_price,
+            "suggested_limit_price": suggested_price,
+            "suggested_max_slippage_bps": next_slippage_bps,
+            "auto_resubmit": False,
+        }
 
     @staticmethod
     def _float_or_none(value: Any) -> Optional[float]:
@@ -386,6 +414,14 @@ class ExecutionTracker:
             return ExecutionStatus.SUBMITTED
         else:
             return ExecutionStatus.SUBMITTED  # Still processing
+
+    def _status_from_signal(self, status: Any) -> ExecutionStatus:
+        text = str(status or "").lower()
+        if text == "partial_filled":
+            return ExecutionStatus.PARTIAL_FILLED
+        if text == "cancel_requested":
+            return ExecutionStatus.CANCEL_REQUESTED
+        return ExecutionStatus.SUBMITTED
     
     def _update_execution_in_backend(self, execution: ExecutionRecord, broker_status: Dict[str, Any]) -> None:
         """Update execution in backend system."""
@@ -417,7 +453,10 @@ class ExecutionTracker:
                 "price_floor": execution.price_floor,
                 "price_ceiling": execution.price_ceiling,
                 "effective_limit_price": execution.effective_limit_price,
+                "remaining_size": self._remaining_size(execution),
             }
+            if execution.status in {ExecutionStatus.CANCEL_REQUESTED, ExecutionStatus.PARTIAL_CANCELLED}:
+                execution_record["chase_suggestion"] = self._build_chase_suggestion(execution)
             
             # Add any additional broker-specific fields
             for key, value in broker_status.items():
@@ -433,8 +472,11 @@ class ExecutionTracker:
                 "filled_qty": execution.filled_size,
                 "avg_price": execution.filled_price,
                 "effective_limit_price": execution.effective_limit_price,
+                "remaining_size": self._remaining_size(execution),
                 "updated_at": execution.updated_at,
             }
+            if execution.status in {ExecutionStatus.CANCEL_REQUESTED, ExecutionStatus.PARTIAL_CANCELLED}:
+                signal_update["chase_suggestion"] = self._build_chase_suggestion(execution)
             
             if execution.status in [ExecutionStatus.FILLED, ExecutionStatus.REJECTED,
                                    ExecutionStatus.CANCELLED, ExecutionStatus.PARTIAL_CANCELLED, ExecutionStatus.FAILED]:

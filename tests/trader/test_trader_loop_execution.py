@@ -33,6 +33,9 @@ class MockApiClient:
             "price": 10.0,
             "account_id": "ACC_X"
         }]
+
+    def get_submitted_signals(self, limit=100):
+        return []
     
     def update_signal_status(self, order_id, payload):
         self.signal_updates.append({
@@ -330,6 +333,31 @@ def test_trader_loop_cash_gates_buy_orders():
     assert broker.placed_orders == []
     assert api.signal_updates[0]["payload"]["status"] == "retry_pending"
     assert "waiting_for_cash" in api.signal_updates[0]["payload"]["last_error"]
+
+
+def test_trader_loop_resume_tracks_cancel_requested_order():
+    cfg = TraderConfig(
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0
+    )
+    api = MockApiClient()
+    api.get_submitted_signals = lambda limit=100: [
+        {
+            "order_id": "ORDER_CANCEL_REQ",
+            "broker_order_id": "BROKER_CANCEL_REQ",
+            "status": "cancel_requested",
+            "symbol": "000001",
+            "action": "sell",
+            "size": 100,
+        }
+    ]
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=True, enable_position_sync=False)
+
+    assert loop.execution_tracker.attach_existing_order(api.get_submitted_signals()[0]) is True
+    assert loop.execution_tracker.is_tracking("ORDER_CANCEL_REQ") is True
 
 
 def test_trader_loop_retries_buy_without_price_for_cash_check():

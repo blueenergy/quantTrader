@@ -231,6 +231,31 @@ def test_attach_existing_order_preserves_live_signal_metadata():
     assert tracker._broker_to_order_map["987654"] == "ORDER_RECOVER"
 
 
+def test_attach_existing_cancel_requested_order_preserves_tracking():
+    api = FakeApiClient()
+    broker = FakeBroker()
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+
+    signal = {
+        "order_id": "ORDER_CANCEL_REQ",
+        "broker_order_id": 1234,
+        "symbol": "000001.SZ",
+        "action": "sell",
+        "size": 300,
+        "status": "cancel_requested",
+        "filled_qty": 100,
+        "reference_price": 10.0,
+        "effective_limit_price": 9.95,
+    }
+
+    assert tracker.attach_existing_order(signal) is True
+
+    execution = tracker._pending_executions["ORDER_CANCEL_REQ"]
+    assert execution.status == ExecutionStatus.CANCEL_REQUESTED
+    assert execution.filled_size == 100
+    assert tracker._broker_to_order_map["1234"] == "ORDER_CANCEL_REQ"
+
+
 def test_sell_order_uses_protected_limit_price():
     api = FakeApiClient()
     broker = FakeBroker()
@@ -337,5 +362,41 @@ def test_expired_sell_order_requests_cancel():
 
     tracker.poll_execution_status()
 
-    assert api.signal_updates[-1]["payload"]["status"] == "retry_pending"
+    assert api.signal_updates[-1]["payload"]["status"] == "cancel_requested"
     assert api.signal_updates[-1]["payload"]["last_error"] == "sell_order_expired_cancel_requested"
+    assert api.signal_updates[-1]["payload"]["remaining_size"] == 100
+    suggestion = api.signal_updates[-1]["payload"]["chase_suggestion"]
+    assert suggestion["auto_resubmit"] is False
+    assert suggestion["mode"] == "manual_review"
+    assert suggestion["remaining_size"] == 100
+    assert suggestion["suggested_limit_price"] == 9.87
+
+
+def test_partial_cancelled_records_remaining_size_and_chase_suggestion():
+    api = FakeApiClient()
+    broker = FakeBroker()
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+    tracker.submit_order(
+        {
+            "order_id": "ORDER_PART_CANCEL",
+            "symbol": "000001",
+            "action": "sell",
+            "size": 300,
+            "reference_price": 10.0,
+        }
+    )
+    broker.execution_responses = {
+        "BROKER_ORDER_PART_CANCEL": {
+            "status": "partial_cancelled",
+            "filled_size": 100,
+            "avg_price": 9.95,
+        }
+    }
+
+    tracker.poll_execution_status()
+
+    execution = api.executions[-1]
+    assert execution["status"] == "partial_cancelled"
+    assert execution["remaining_size"] == 200
+    assert execution["chase_suggestion"]["remaining_size"] == 200
+    assert execution["chase_suggestion"]["auto_resubmit"] is False

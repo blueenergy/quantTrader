@@ -116,7 +116,7 @@ class TraderApiClient:
             all_signals = self.get_pending_signals(limit=limit, include_submitted=True)
 
             # Filter client-side for broker-submitted lifecycle statuses.
-            submitted = [s for s in all_signals if s.get("status") in {"submitted", "partial_filled"}]
+            submitted = [s for s in all_signals if s.get("status") in {"submitted", "partial_filled", "cancel_requested"}]
 
             log.debug("Found %d submitted signals out of %d total", len(submitted), len(all_signals))
             return submitted
