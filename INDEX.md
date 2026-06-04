@@ -23,6 +23,7 @@
 | **E2E_TEST_GUIDE.md** | Step-by-step testing | 20 min | QA / Testers |
 | **TESTING_CHECKLIST.md** | Progress tracker | As you test | Testers |
 | **SETUP_SUMMARY.md** | Architecture & design | 10 min | Developers |
+| **KNOWN_LIMITATIONS.md** | Deferred issues & known gaps | 5 min | Developers |
 | **INDEX.md** | This file | 2 min | Navigation |
 
 ## 🛠️ Tools & Helpers
