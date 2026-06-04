@@ -152,6 +152,37 @@ def test_poll_execution_status():
     assert execution["status"] == "filled"
     assert execution["filled_size"] == 100
     assert execution["filled_price"] == 10.05
+    assert execution["commission"] == 0.1
+    assert execution["estimated_fee"] is False
+
+
+def test_poll_execution_status_estimates_fee_when_broker_fee_missing():
+    api = FakeApiClient()
+    broker = FakeBroker()
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+
+    tracker.submit_order({
+        "order_id": "ORDER_FEE",
+        "symbol": "000001",
+        "action": "sell",
+        "size": 100,
+        "price": 10.0,
+    })
+    broker.execution_responses = {
+        "BROKER_ORDER_FEE": {
+            "status": "filled",
+            "filled_size": 100,
+            "avg_price": 10.0,
+        }
+    }
+
+    tracker.poll_execution_status()
+
+    execution = api.executions[0]
+    assert execution["estimated_fee"] is True
+    assert execution["commission"] == 5.0
+    assert execution["stamp_tax"] == 0.5
+    assert execution["total_fee"] == 5.5
 
 
 def test_partial_fill_handling():

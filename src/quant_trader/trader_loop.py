@@ -8,6 +8,7 @@ from .api_client import TraderApiClient
 from .broker_base import BrokerAdapter
 from .config import TraderConfig
 from .execution_tracker import ExecutionTracker, EnhancedPositionManager
+from .fee_model import TradeFeeModel
 
 log = logging.getLogger("quantTrader")
 
@@ -37,6 +38,7 @@ class TraderLoop:
         self.cfg = cfg
         self.api = api
         self.broker = broker
+        self.fee_model = TradeFeeModel.from_config(cfg.fee_model)
         self._stop = False
         
         # Execution tracker (replaces immediate 'filled' marking)
@@ -44,7 +46,8 @@ class TraderLoop:
         if enable_execution_tracking:
             self.execution_tracker = ExecutionTracker(
                 api_client=api,
-                broker=broker
+                broker=broker,
+                fee_model=self.fee_model,
             )
             log.info("Execution tracking ENABLED")
         self._last_heartbeat = 0.0
@@ -244,6 +247,8 @@ class TraderLoop:
                 # 3) minimal version: treat as immediately filled
                 filled_price = sig.get("price") or 100.0
                 filled_size = sig.get("size") or 0
+                filled_amount = float(filled_price or 0) * float(filled_size or 0)
+                fee = self.fee_model.estimate(sig.get("action"), filled_amount)
 
                 execution = {
                     "order_id": order_id,
@@ -253,7 +258,7 @@ class TraderLoop:
                     "target_price": sig.get("price"),
                     "filled_price": filled_price,
                     "filled_size": filled_size,
-                    "commission": 0.0,
+                    **fee.to_dict(),
                     "status": "filled",
                     "broker": sig.get("broker", "simulated"),
                     "mode": "live",

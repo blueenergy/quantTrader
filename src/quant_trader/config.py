@@ -27,6 +27,7 @@ class TraderConfig:
     broker: str = "simulated"
     miniQMT: Optional[Dict[str, Any]] = field(default_factory=dict)
     securities_account_id: Optional[str] = None
+    fee_model: Dict[str, Any] = field(default_factory=dict)
 
 
 def load_config(config_path: str | None = None) -> TraderConfig:
@@ -83,6 +84,18 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         if isinstance(data.get("securities_account_id"), str)
         else os.getenv("TRADER_SECURITIES_ACCOUNT_ID")
     )
+    fee_model = data.get("fee_model") if isinstance(data.get("fee_model"), dict) else {}
+    for env_name, field_name in (
+        ("TRADER_BUY_COMMISSION_RATE", "buy_commission_rate"),
+        ("TRADER_SELL_COMMISSION_RATE", "sell_commission_rate"),
+        ("TRADER_MIN_COMMISSION", "min_commission"),
+        ("TRADER_STAMP_TAX_RATE", "stamp_tax_rate"),
+        ("TRADER_TRANSFER_FEE_RATE", "transfer_fee_rate"),
+        ("TRADER_TRANSACTION_COST", "transaction_cost"),
+    ):
+        value = os.getenv(env_name)
+        if value not in (None, ""):
+            fee_model[field_name] = value
 
     return TraderConfig(
         api_base_url=str(api_base_url).rstrip("/"),
@@ -92,4 +105,5 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         broker=str(broker),
         miniQMT=miniQMT,
         securities_account_id=securities_account_id,
+        fee_model=fee_model,
     )

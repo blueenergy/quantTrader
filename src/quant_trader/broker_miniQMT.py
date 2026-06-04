@@ -391,6 +391,19 @@ class MiniQMTBroker(BrokerAdapter):
                     "qmt_status": qmt_status,
                     "created_time": order.order_time,
                 }
+                for target, candidates in {
+                    "commission": ("commission", "entrust_fee", "fee"),
+                    "stamp_tax": ("stamp_tax", "stamp_duty", "tax"),
+                    "transfer_fee": ("transfer_fee", "transfer_cost"),
+                    "other_fee": ("other_fee", "other_cost", "handling_fee"),
+                    "total_fee": ("total_fee", "fee_total", "cost", "total_cost"),
+                }.items():
+                    for name in candidates:
+                        if hasattr(order, name):
+                            value = getattr(order, name)
+                            if value not in (None, ""):
+                                order_data[target] = value
+                                break
                 result[str(order.order_id)] = order_data
                 
             return result
@@ -429,6 +442,9 @@ class MiniQMTBroker(BrokerAdapter):
                     "msg": order_data.get("status_msg", ""),
                     "raw_status": order_data.get("qmt_status")
                 }
+                for key in ("commission", "stamp_tax", "transfer_fee", "other_fee", "total_fee"):
+                    if key in order_data:
+                        result[broker_order_id][key] = order_data[key]
             
             if result:
                 log.debug("Got status for %d orders from miniQMT", len(result))

@@ -24,6 +24,7 @@ class _FakeXtTrader:
         self.subscribed_account = None
         self.order_calls = []
         self.cancel_calls = []
+        self.orders = []
         _FakeXtTrader.instances.append(self)
 
     def start(self):
@@ -44,6 +45,9 @@ class _FakeXtTrader:
     def cancel_order_stock(self, *args):
         self.cancel_calls.append(args)
         return 0
+
+    def query_stock_orders(self, account):
+        return self.orders
 
     def unsubscribe(self, account):
         return 0
@@ -66,6 +70,13 @@ def _install_fake_xtquant(monkeypatch):
     xtconstant.STOCK_SELL = 24
     xtconstant.MARKET_PEER_PRICE_FIRST = 41
     xtconstant.FIX_PRICE = 42
+    xtconstant.ORDER_JUNK = 51
+    xtconstant.ORDER_CANCELED = 55
+    xtconstant.ORDER_SUCCEEDED = 53
+    xtconstant.ORDER_PART_SUCCEEDED = 52
+    xtconstant.ORDER_PARTSUCC_CANCEL = 54
+    xtconstant.ORDER_REPORTED = 50
+    xtconstant.ORDER_WAIT_REPORTING = 56
 
     xtquant.xttrader = xttrader
     xtquant.xttype = xttype
@@ -150,3 +161,28 @@ def test_miniqmt_cancel_order_calls_broker_api(monkeypatch):
     account, order_id = trader.cancel_calls[-1]
     assert account.account_id == "ACC123"
     assert order_id == 123456
+
+
+def test_miniqmt_execution_status_includes_real_fee_fields(monkeypatch):
+    broker, trader, _ = _broker(monkeypatch)
+    order = types.SimpleNamespace(
+        order_id=123456,
+        stock_code="000001.SZ",
+        order_type=24,
+        order_status=53,
+        status_msg="已成",
+        order_volume=100,
+        price=10.0,
+        traded_volume=100,
+        traded_price=10.01,
+        order_time=1700000000,
+        commission=0.12,
+        stamp_tax=0.5,
+    )
+    trader.orders = [order]
+
+    status = broker.get_execution_status()["123456"]
+
+    assert status["status"] == "filled"
+    assert status["commission"] == 0.12
+    assert status["stamp_tax"] == 0.5

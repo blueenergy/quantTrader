@@ -13,6 +13,7 @@ from enum import Enum
 
 from .api_client import TraderApiClient
 from .broker_base import BrokerAdapter
+from .fee_model import TradeFeeModel
 
 PRICE_TICK = Decimal("0.01")
 
@@ -42,6 +43,11 @@ class ExecutionRecord:
     filled_price: Optional[float] = None
     filled_size: int = 0
     commission: float = 0.0
+    stamp_tax: float = 0.0
+    transfer_fee: float = 0.0
+    other_fee: float = 0.0
+    total_fee: float = 0.0
+    estimated_fee: bool = False
     status: ExecutionStatus = ExecutionStatus.PENDING
     broker_order_id: Optional[str] = None
     created_at: float = field(default_factory=time.time)
@@ -61,6 +67,7 @@ class ExecutionRecord:
     price_floor: Optional[float] = None
     price_ceiling: Optional[float] = None
     effective_limit_price: Optional[float] = None
+    fee_model: Dict[str, Any] = field(default_factory=dict)
     valid_until: Optional[float] = None
     last_status_change_at: float = field(default_factory=time.time)
     cancel_requested_at: Optional[float] = None
@@ -69,9 +76,10 @@ class ExecutionRecord:
 class ExecutionTracker:
     """Tracks order execution lifecycle from submission to completion."""
     
-    def __init__(self, api_client: TraderApiClient, broker: BrokerAdapter):
+    def __init__(self, api_client: TraderApiClient, broker: BrokerAdapter, fee_model: Optional[TradeFeeModel] = None):
         self.api_client = api_client
         self.broker = broker
+        self.fee_model = fee_model or TradeFeeModel()
         self.logger = logging.getLogger(__name__)
         
         # In-memory tracking of pending executions
@@ -122,6 +130,7 @@ class ExecutionTracker:
             price_floor=signal.get("price_floor"),
             price_ceiling=signal.get("price_ceiling"),
             effective_limit_price=signal.get("effective_limit_price"),
+            fee_model=signal.get("fee_model") or {},
             valid_until=self._timestamp_or_none(signal.get("valid_until")),
         )
         
@@ -216,6 +225,7 @@ class ExecutionTracker:
                 price_floor=signal.get("price_floor"),
                 price_ceiling=signal.get("price_ceiling"),
                 effective_limit_price=signal.get("effective_limit_price"),
+                fee_model=signal.get("fee_model") or {},
                 valid_until=self._timestamp_or_none(signal.get("valid_until")),
             )
             
@@ -257,6 +267,15 @@ class ExecutionTracker:
                 execution.status = new_status
                 execution.filled_size = broker_status.get('filled_size', 0)
                 execution.filled_price = broker_status.get('avg_price')
+                amount = float(execution.filled_size or 0) * float(execution.filled_price or 0.0)
+                fee_model = TradeFeeModel.from_config(execution.fee_model) if execution.fee_model else self.fee_model
+                fee = fee_model.extract_or_estimate(execution.action, amount, broker_status)
+                execution.commission = fee.commission
+                execution.stamp_tax = fee.stamp_tax
+                execution.transfer_fee = fee.transfer_fee
+                execution.other_fee = fee.other_fee
+                execution.total_fee = fee.total_fee
+                execution.estimated_fee = fee.estimated_fee
                 execution.updated_at = time.time()
                 
                 # Update backend
@@ -436,6 +455,11 @@ class ExecutionTracker:
                 "filled_price": execution.filled_price,
                 "filled_size": execution.filled_size,
                 "commission": execution.commission,
+                "stamp_tax": execution.stamp_tax,
+                "transfer_fee": execution.transfer_fee,
+                "other_fee": execution.other_fee,
+                "total_fee": execution.total_fee,
+                "estimated_fee": execution.estimated_fee,
                 "status": execution.status.value,
                 "broker_order_id": execution.broker_order_id,
                 "qmt_order_id": execution.broker_order_id,
@@ -453,6 +477,7 @@ class ExecutionTracker:
                 "price_floor": execution.price_floor,
                 "price_ceiling": execution.price_ceiling,
                 "effective_limit_price": execution.effective_limit_price,
+                "fee_model": execution.fee_model,
                 "remaining_size": self._remaining_size(execution),
             }
             if execution.status in {ExecutionStatus.CANCEL_REQUESTED, ExecutionStatus.PARTIAL_CANCELLED}:
