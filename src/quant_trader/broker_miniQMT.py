@@ -361,20 +361,27 @@ class MiniQMTBroker(BrokerAdapter):
                 # Map miniQMT status to our status
                 # 50: 已报, 51: 废单, 52: 部成, 53: 已成, 54: 部撤, 55: 已撤, 56: 待报
                 qmt_status = order.order_status
-                status_msg = order.status_msg
+                status_msg = str(getattr(order, "status_msg", "") or "")
+                order_junk = getattr(xtconstant, "ORDER_JUNK", 51)
+                order_canceled = getattr(xtconstant, "ORDER_CANCELED", 55)
+                order_succeeded = getattr(xtconstant, "ORDER_SUCCEEDED", 53)
+                order_part_succeeded = getattr(xtconstant, "ORDER_PART_SUCCEEDED", 52)
+                order_partsucc_cancel = getattr(xtconstant, "ORDER_PARTSUCC_CANCEL", 54)
+                order_reported = getattr(xtconstant, "ORDER_REPORTED", 50)
+                order_wait_reporting = getattr(xtconstant, "ORDER_WAIT_REPORTING", 56)
                 
                 status = "unknown"
-                if qmt_status in [xtconstant.ORDER_JUNK, xtconstant.ORDER_CANCELED]: # 51, 55
+                if qmt_status in [order_junk, order_canceled]: # 51, 55
                     status = "cancelled" # or rejected/failed based on msg
                     if "废单" in status_msg:
                         status = "rejected"
-                elif qmt_status == xtconstant.ORDER_SUCCEEDED: # 53
+                elif qmt_status == order_succeeded: # 53
                     status = "filled"
-                elif qmt_status == xtconstant.ORDER_PART_SUCCEEDED: # 52
+                elif qmt_status == order_part_succeeded: # 52
                     status = "partial_filled"
-                elif qmt_status == xtconstant.ORDER_PARTSUCC_CANCEL: # 54
+                elif qmt_status == order_partsucc_cancel: # 54
                     status = "partial_cancelled" 
-                elif qmt_status in [xtconstant.ORDER_REPORTED, xtconstant.ORDER_WAIT_REPORTING]: # 50, 56
+                elif qmt_status in [order_reported, order_wait_reporting]: # 50, 56
                     status = "submitted"
                 
                 # Convert to standard format

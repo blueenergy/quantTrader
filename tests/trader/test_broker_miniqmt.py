@@ -186,3 +186,27 @@ def test_miniqmt_execution_status_includes_real_fee_fields(monkeypatch):
     assert status["status"] == "filled"
     assert status["commission"] == 0.12
     assert status["stamp_tax"] == 0.5
+
+
+def test_miniqmt_execution_status_tolerates_missing_partial_constant(monkeypatch):
+    broker, trader, xtconstant = _broker(monkeypatch)
+    delattr(xtconstant, "ORDER_PART_SUCCEEDED")
+    trader.orders = [
+        types.SimpleNamespace(
+            order_id=123456,
+            stock_code="000001.SZ",
+            order_type=24,
+            order_status=52,
+            status_msg="部成",
+            order_volume=100,
+            price=10.0,
+            traded_volume=50,
+            traded_price=10.01,
+            order_time=1700000000,
+        )
+    ]
+
+    status = broker.get_execution_status()["123456"]
+
+    assert status["status"] == "partial_filled"
+    assert status["filled_size"] == 50
