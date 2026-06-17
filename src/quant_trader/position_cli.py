@@ -36,8 +36,8 @@ import logging
 import sys
 from pathlib import Path
 
+from quant_trader.client_factory import create_trader_client
 from quant_trader.config import load_config
-from quant_trader.api_client import TraderApiClient
 from quant_trader.position_manager import PositionManager
 
 # Try to import broker
@@ -341,7 +341,7 @@ def main(argv=None):
     setup_logging(cfg.log_level)
     
     # Create components
-    api = TraderApiClient(cfg)
+    api = create_trader_client(cfg)
     broker = create_broker(cfg)
     manager = PositionManager(api_client=api, broker=broker, sync_interval=0)
     
@@ -363,6 +363,9 @@ def main(argv=None):
             cmd_size(manager, args)
     finally:
         broker.close()
+        close = getattr(api, "close", None)
+        if callable(close):
+            close()
 
 
 if __name__ == '__main__':

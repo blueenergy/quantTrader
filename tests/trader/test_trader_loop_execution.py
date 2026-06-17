@@ -112,6 +112,7 @@ class MockBroker:
 def test_trader_loop_initialization():
     """Test TraderLoop initialization with execution tracking."""
     cfg = TraderConfig(
+        backend_mode="api",
         api_base_url="http://test:8000",
         api_token="test_token",
         securities_account_id="SEC123",
@@ -141,6 +142,7 @@ def test_trader_loop_initialization():
 def test_trader_loop_signal_handling():
     """Test signal handling with execution tracking."""
     cfg = TraderConfig(
+        backend_mode="api",
         api_base_url="http://test:8000",
         api_token="test_token",
         securities_account_id="SEC123",
@@ -181,6 +183,7 @@ def test_trader_loop_signal_handling():
 def test_trader_loop_execution_polling():
     """Test execution polling functionality."""
     cfg = TraderConfig(
+        backend_mode="api",
         api_base_url="http://test:8000",
         api_token="test_token",
         securities_account_id="SEC123",
@@ -224,6 +227,7 @@ def test_trader_loop_execution_polling():
 def test_trader_loop_without_execution_tracking():
     """Test trader loop without execution tracking (fallback behavior)."""
     cfg = TraderConfig(
+        backend_mode="api",
         api_base_url="http://test:8000",
         api_token="test_token",
         securities_account_id="SEC123",
@@ -258,6 +262,7 @@ def test_trader_loop_without_execution_tracking():
 def test_trader_loop_records_heartbeat_with_rate_limit(monkeypatch):
     """Test heartbeat payload and 30-second rate limiting."""
     cfg = TraderConfig(
+        backend_mode="api",
         api_base_url="http://test:8000",
         api_token="test_token",
         securities_account_id="SEC123",
@@ -295,6 +300,7 @@ def test_trader_loop_records_heartbeat_with_rate_limit(monkeypatch):
 
 def test_trader_loop_orders_sells_before_buys():
     cfg = TraderConfig(
+        backend_mode="api",
         api_base_url="http://test:8000",
         api_token="test_token",
         securities_account_id="SEC123",
@@ -316,6 +322,7 @@ def test_trader_loop_orders_sells_before_buys():
 
 def test_trader_loop_cash_gates_buy_orders():
     cfg = TraderConfig(
+        backend_mode="api",
         api_base_url="http://test:8000",
         api_token="test_token",
         securities_account_id="SEC123",
@@ -337,6 +344,7 @@ def test_trader_loop_cash_gates_buy_orders():
 
 def test_trader_loop_resume_tracks_cancel_requested_order():
     cfg = TraderConfig(
+        backend_mode="api",
         api_base_url="http://test:8000",
         api_token="test_token",
         securities_account_id="SEC123",
@@ -362,6 +370,7 @@ def test_trader_loop_resume_tracks_cancel_requested_order():
 
 def test_trader_loop_retries_buy_without_price_for_cash_check():
     cfg = TraderConfig(
+        backend_mode="api",
         api_base_url="http://test:8000",
         api_token="test_token",
         securities_account_id="SEC123",

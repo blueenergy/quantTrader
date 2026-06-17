@@ -20,6 +20,7 @@ class TestCleanupStalePositions:
     def config(self):
         """Create a test config."""
         return TraderConfig(
+            backend_mode="api",
             api_base_url="http://localhost:3001/api",
             api_token="test_token_123",
             securities_account_id="test_account_id"
@@ -227,6 +228,7 @@ class TestCleanupEdgeCases:
     def config(self):
         """Create a test config."""
         return TraderConfig(
+            backend_mode="api",
             api_base_url="http://localhost:3001/api",
             api_token="test_token_123",
             securities_account_id="test_account_id"

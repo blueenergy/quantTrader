@@ -6,7 +6,7 @@ with real execution status from the broker.
 
 import logging
 import time
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional, Union
 from dataclasses import dataclass, field
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from enum import Enum
@@ -14,6 +14,9 @@ from enum import Enum
 from .api_client import TraderApiClient
 from .broker_base import BrokerAdapter
 from .fee_model import TradeFeeModel
+from .mongo_trader_client import MongoTraderClient
+
+TraderBackend = Union[TraderApiClient, MongoTraderClient]
 
 PRICE_TICK = Decimal("0.01")
 
@@ -76,7 +79,7 @@ class ExecutionRecord:
 class ExecutionTracker:
     """Tracks order execution lifecycle from submission to completion."""
     
-    def __init__(self, api_client: TraderApiClient, broker: BrokerAdapter, fee_model: Optional[TradeFeeModel] = None):
+    def __init__(self, api_client: TraderBackend, broker: BrokerAdapter, fee_model: Optional[TradeFeeModel] = None):
         self.api_client = api_client
         self.broker = broker
         self.fee_model = fee_model or TradeFeeModel()
@@ -532,7 +535,7 @@ class ExecutionTracker:
 class EnhancedPositionManager:
     """Enhanced position manager with account metadata and position cleanup."""
     
-    def __init__(self, api_client: TraderApiClient, broker: BrokerAdapter, 
+    def __init__(self, api_client: TraderBackend, broker: BrokerAdapter,
                  sync_interval: float = 60.0):
         self.api_client = api_client
         self.broker = broker

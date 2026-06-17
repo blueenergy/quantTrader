@@ -40,8 +40,10 @@
 src/quant_trader/
 ├── __init__.py           - Package marker
 ├── cli.py                - Command-line interface
+├── client_factory.py     - Select DB vs API backend
 ├── config.py             - Configuration loading
-├── api_client.py         - REST API client
+├── api_client.py         - REST API client (backend_mode=api)
+├── mongo_trader_client.py - MongoDB client (default backend_mode=db)
 ├── broker_base.py        - Abstract broker interface
 ├── broker_simulated.py   - Simulated broker (no real trades)
 └── trader_loop.py        - Main trading loop
@@ -51,6 +53,7 @@ src/quant_trader/
 
 ```
 config.json              - Your personal config (Git-ignored, contains token)
+config.db.example.json   - Example for MongoDB default backend
 .env.example             - Template for environment variables
 .gitignore               - Protects sensitive files
 pyproject.toml           - Package configuration

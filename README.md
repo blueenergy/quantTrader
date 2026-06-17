@@ -1,15 +1,15 @@
 # quantTrader
 
-A minimal, REST-based distributed trader client for the quantFinance trading framework.
+A minimal trader client for the quantFinance trading framework: **MongoDB by default**, optional REST API mode.
 
 ## Overview
 
-**quantTrader** is an independent trader application that connects to the quantFinance backend via RESTful APIs. It fetches trading signals, executes trades via a configurable broker adapter, and reports execution results back to the backend—all without direct database access.
+**quantTrader** is an independent trader application that fetches trading signals, executes trades via a configurable broker adapter, and reports execution results back to quantFinance. By default it uses **MongoDB** with the same collections as the backend (`trade_signals`, `trade_executions`, etc.); optional **REST** mode keeps the previous HTTP-only behavior.
 
 ### Key Features
 
-- **RESTful API Integration**: Communicates with quantFinance backend via clean HTTP/REST endpoints.
-- **Token-Based Authentication**: Uses bearer token authentication for secure, per-user/per-machine access.
+- **MongoDB backend (default)**: Direct reads/writes aligned with `quantFinance/routers/trader.py`, reducing FastAPI load from high-frequency polling.
+- **RESTful API mode (optional)**: Set `TRADER_BACKEND_MODE=api` and use bearer token + `api_base_url` as before.
 - **Broker Abstraction**: Pluggable broker adapters allow easy switching between simulators and real brokers (miniQMT, etc.).
 - **Closed-Loop Trading**: Fetches signals → executes → reports results → updates backend status.
 - **Distributed Deployment**: Run independently on any machine with network access to backend (Windows, Linux, Mac).
@@ -35,7 +35,64 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -e .
 ```
 
-### 2. Obtain Access Token
+### 2. Create Configuration
+
+**Default: DB mode.** Use the same MongoDB as quantFinance (`MONGO_URI` / `MONGO_DB`) and your `users` document id as `user_id`. See [`config.db.example.json`](config.db.example.json).
+
+```json
+{
+  "backend_mode": "db",
+  "mongo_uri": "mongodb://127.0.0.1:27017",
+  "mongo_db": "finance",
+  "user_id": "<your-user-id-from-users-collection>",
+  "securities_account_id": "<optional-securities_accounts-ObjectId>",
+  "poll_interval": 1.0,
+  "log_level": "INFO",
+  "broker": "simulated"
+}
+```
+
+Environment equivalents: `TRADER_BACKEND_MODE`, `MONGO_URI` or `TRADER_MONGO_URI`, `MONGO_DB` or `TRADER_MONGO_DB`, `TRADER_USER_ID`.
+
+**API mode (legacy):** set `"backend_mode": "api"` and provide `api_base_url` + `api_token` (no `mongo_uri` / `user_id` required).
+
+Create a `config.json` file in your working directory (this file is **NOT tracked by Git** for security):
+
+```json
+{
+  "backend_mode": "api",
+  "api_base_url": "http://<backend-host>:8000/api",
+  "api_token": "<your-access-token-here>",
+  "poll_interval": 1.0,
+  "log_level": "INFO"
+}
+```
+
+**IMPORTANT**: Keep `config.json` out of version control. It may contain tokens and DB credentials.
+
+Alternatively, set environment variables:
+
+```bash
+export TRADER_BACKEND_MODE="db"
+export MONGO_URI="mongodb://127.0.0.1:27017"
+export TRADER_USER_ID="<your-user-id>"
+export TRADER_POLL_INTERVAL="1.0"
+export TRADER_LOG_LEVEL="INFO"
+```
+
+For API-only:
+
+```bash
+export TRADER_BACKEND_MODE="api"
+export TRADER_API_BASE_URL="http://<backend-host>:8000/api"
+export TRADER_API_TOKEN="<your-access-token-here>"
+export TRADER_POLL_INTERVAL="1.0"
+export TRADER_LOG_LEVEL="INFO"
+```
+
+### 3. Obtain Access Token (API mode only)
+
+Skip this section if you use **DB mode**.
 
 Login to the quantFinance backend to get your access token:
 
@@ -47,6 +104,7 @@ curl -X POST http://<backend-host>:8000/api/user/login \
 ```
 
 Response will include:
+
 ```json
 {
   "access_token": "eyJhbGc...",
@@ -55,31 +113,7 @@ Response will include:
 }
 ```
 
-Copy the `access_token` value.
-
-### 3. Create Configuration
-
-Create a `config.json` file in your working directory (this file is **NOT tracked by Git** for security):
-
-```json
-{
-  "api_base_url": "http://<backend-host>:8000/api",
-  "api_token": "<your-access-token-here>",
-  "poll_interval": 1.0,
-  "log_level": "INFO"
-}
-```
-
-**IMPORTANT**: Keep `config.json` out of version control. It contains your authentication token.
-
-Alternatively, set environment variables:
-
-```bash
-export TRADER_API_BASE_URL="http://<backend-host>:8000/api"
-export TRADER_API_TOKEN="<your-access-token-here>"
-export TRADER_POLL_INTERVAL="1.0"
-export TRADER_LOG_LEVEL="INFO"
-```
+Copy the `access_token` value into `api_token` when `backend_mode` is `api`.
 
 ### 4. Run quantTrader
 
@@ -96,7 +130,8 @@ You should see logs like:
 2025-12-22 12:34:56 [INFO] quantTrader: quantTrader logging initialized
 2025-12-22 12:34:56 [INFO] quantTrader: Log file: ~/.local/share/quantTrader/logs/quantTrader.log
 2025-12-22 12:34:56 [INFO] quantTrader: Log level: INFO
-2025-12-22 12:34:56 [INFO] quant_trader.trader_loop: quantTrader started. API=http://backend:8000/api
+2025-12-22 12:34:56 [INFO] quant_trader.trader_loop: quantTrader started. backend=db
+2025-12-22 12:34:56 [INFO] quant_trader.trader_loop: Mongo backend: db=finance user_id=... securities_account_id=...
 2025-12-22 12:34:56 [INFO] quant_trader.trader_loop: Position sync: ENABLED (interval=60s)
 2025-12-22 12:34:57 [INFO] quant_trader.trader_loop: Fetched 0 pending signals
 2025-12-22 12:35:57 [INFO] quant_trader.trader_loop: Portfolio: 3 positions, Value=¥125,340.00, P&L=¥+2,450.00 (+2.0%)

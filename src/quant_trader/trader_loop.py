@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from .api_client import TraderApiClient
 from .broker_base import BrokerAdapter
 from .config import TraderConfig
 from .execution_tracker import ExecutionTracker, EnhancedPositionManager
 from .fee_model import TradeFeeModel
+from .mongo_trader_client import MongoTraderClient
 
 log = logging.getLogger("quantTrader")
 
@@ -16,8 +17,8 @@ log = logging.getLogger("quantTrader")
 class TraderLoop:
     """Main trader loop.
 
-    Pulls signals from backend, sends them to the broker, and reports
-    executions back to backend via REST API.
+    Pulls signals from backend (REST or MongoDB), sends them to the broker, and reports
+    executions back via the configured trader client.
     
     Enhanced features:
     - Proper execution tracking (submitted → filled/partial/rejected)
@@ -30,7 +31,7 @@ class TraderLoop:
     def __init__(
         self,
         cfg: TraderConfig,
-        api: TraderApiClient,
+        api: Union[TraderApiClient, MongoTraderClient],
         broker: BrokerAdapter,
         enable_position_sync: bool = True,
         enable_execution_tracking: bool = True
@@ -66,7 +67,16 @@ class TraderLoop:
         self._stop = True
 
     def run_forever(self) -> None:
-        log.info("quantTrader started. API=%s", self.cfg.api_base_url)
+        log.info("quantTrader started. backend=%s", self.cfg.backend_mode)
+        if self.cfg.backend_mode.strip().lower() == "db":
+            log.info(
+                "Mongo backend: db=%s user_id=%s securities_account_id=%s",
+                self.cfg.mongo_db,
+                self.cfg.user_id,
+                self.cfg.securities_account_id or "-",
+            )
+        else:
+            log.info("API base URL: %s", self.cfg.api_base_url)
         log.info("Poll interval: %.1f seconds", self.cfg.poll_interval)
         log.info("Broker type: %s", type(self.broker).__name__)
         if self.position_manager:

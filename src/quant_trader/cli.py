@@ -8,8 +8,8 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import List
 
-from .api_client import TraderApiClient
 from .broker_simulated import SimulatedBroker
+from .client_factory import create_trader_client
 from .config import load_config
 from .trader_loop import TraderLoop
 
@@ -112,7 +112,7 @@ def main(argv: List[str] | None = None) -> None:
     # Setup logging with file output
     _setup_logging(cfg)
 
-    api = TraderApiClient(cfg)
+    api = create_trader_client(cfg)
     
     # Initialize broker based on config
     broker_type = getattr(cfg, 'broker', 'simulated').lower()
@@ -153,6 +153,10 @@ def main(argv: List[str] | None = None) -> None:
     except KeyboardInterrupt:
         print("\nStopping quantTrader...")
         loop.stop()
+    finally:
+        close = getattr(api, "close", None)
+        if callable(close):
+            close()
 
 
 if __name__ == "__main__":  # pragma: no cover

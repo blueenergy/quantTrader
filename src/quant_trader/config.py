@@ -11,17 +11,30 @@ from typing import Any, Dict, Optional
 class TraderConfig:
     """Configuration for quantTrader.
 
-    api_base_url: Base URL of backend API, e.g. "http://backend:8000/api"
-    api_token:   Bearer token for authentication
+    backend_mode: ``db`` (MongoDB direct) or ``api`` (REST to quantFinance).
+
+    DB mode (default):
+    - mongo_uri, mongo_db, user_id are required.
+    - api_base_url / api_token optional (e.g. for switching to API mode).
+
+    API mode:
+    - api_base_url, api_token required (same as before).
+
     poll_interval: Seconds between each polling cycle
-    log_level:     Logging level string, e.g. "INFO", "DEBUG"
-    broker:        Broker type: "simulated" or "miniQMT"
-    miniQMT:       miniQMT broker config (if broker="miniQMT")
+    log_level: Logging level string, e.g. "INFO", "DEBUG"
+    broker: Broker type: "simulated" or "miniQMT"
+    miniQMT: miniQMT broker config (if broker="miniQMT")
     securities_account_id: MongoDB _id linking to securities_accounts collection
     """
 
-    api_base_url: str
-    api_token: str
+    backend_mode: str = "db"
+    mongo_uri: Optional[str] = None
+    mongo_db: str = "finance"
+    user_id: Optional[str] = None
+    api_fallback_enabled: bool = False
+
+    api_base_url: str = ""
+    api_token: str = ""
     poll_interval: float = 1.0
     log_level: str = "INFO"
     broker: str = "simulated"
@@ -37,15 +50,52 @@ def load_config(config_path: str | None = None) -> TraderConfig:
     1. JSON file (if provided)
     2. Environment variables
 
-    Required:
-    - api_base_url  (TRADER_API_BASE_URL or config.api_base_url)
-    - api_token     (TRADER_API_TOKEN or config.api_token)
+    ``TRADER_BACKEND_MODE`` / ``backend_mode``: ``db`` (default) or ``api``.
+
+    DB mode requires:
+    - mongo_uri: ``mongo_uri`` in JSON, or ``TRADER_MONGO_URI`` / ``MONGO_URI``
+    - mongo_db: ``mongo_db`` in JSON, or ``TRADER_MONGO_DB`` / ``MONGO_DB`` (default finance)
+    - user_id: ``user_id`` in JSON, or ``TRADER_USER_ID``
+
+    API mode requires:
+    - api_base_url (``TRADER_API_BASE_URL`` or config)
+    - api_token (``TRADER_API_TOKEN`` or config)
     """
     data: dict[str, object] = {}
     if config_path:
         p = Path(config_path)
         if p.exists():
             data = json.loads(p.read_text(encoding="utf-8"))
+
+    backend_raw = (
+        data.get("backend_mode")
+        if isinstance(data.get("backend_mode"), str)
+        else os.getenv("TRADER_BACKEND_MODE", "db")
+    )
+    backend_mode = str(backend_raw).strip().lower() or "db"
+    if backend_mode not in ("db", "api"):
+        raise RuntimeError(f"Invalid backend_mode {backend_raw!r}; expected 'db' or 'api'")
+
+    api_fallback_raw = data.get("api_fallback_enabled") if "api_fallback_enabled" in data else os.getenv(
+        "TRADER_API_FALLBACK_ENABLED"
+    )
+    api_fallback_enabled = str(api_fallback_raw).lower() in ("1", "true", "yes") if api_fallback_raw else False
+
+    mongo_uri = (
+        (data.get("mongo_uri") if isinstance(data.get("mongo_uri"), str) else None)
+        or os.getenv("TRADER_MONGO_URI")
+        or os.getenv("MONGO_URI")
+    )
+    mongo_db = (
+        (data.get("mongo_db") if isinstance(data.get("mongo_db"), str) else None)
+        or os.getenv("TRADER_MONGO_DB")
+        or os.getenv("MONGO_DB")
+        or "finance"
+    )
+    user_id = (
+        (data.get("user_id") if isinstance(data.get("user_id"), str) else None)
+        or os.getenv("TRADER_USER_ID")
+    )
 
     api_base_url = (data.get("api_base_url") if isinstance(data.get("api_base_url"), str) else None) or os.getenv(
         "TRADER_API_BASE_URL"
@@ -54,10 +104,24 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         "TRADER_API_TOKEN"
     )
 
-    if not api_base_url:
-        raise RuntimeError("api_base_url is required (config.api_base_url or TRADER_API_BASE_URL)")
-    if not api_token:
-        raise RuntimeError("api_token is required (config.api_token or TRADER_API_TOKEN)")
+    if backend_mode == "api":
+        if not api_base_url:
+            raise RuntimeError("api_base_url is required in API mode (config.api_base_url or TRADER_API_BASE_URL)")
+        if not api_token:
+            raise RuntimeError("api_token is required in API mode (config.api_token or TRADER_API_TOKEN)")
+    else:
+        if not mongo_uri:
+            raise RuntimeError(
+                "mongo_uri is required in DB mode (config.mongo_uri, TRADER_MONGO_URI, or MONGO_URI). "
+                "Set TRADER_BACKEND_MODE=api to use REST only."
+            )
+        if not user_id:
+            raise RuntimeError(
+                "user_id is required in DB mode (config.user_id or TRADER_USER_ID). "
+                "Set TRADER_BACKEND_MODE=api to use token-based REST instead."
+            )
+        api_base_url = api_base_url or ""
+        api_token = api_token or ""
 
     poll_interval_raw = data.get("poll_interval") if "poll_interval" in data else os.getenv("TRADER_POLL_INTERVAL")
     try:
@@ -70,15 +134,15 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         if isinstance(data.get("log_level"), str)
         else os.getenv("TRADER_LOG_LEVEL", "INFO")
     )
-    
+
     broker = (
         data.get("broker")
         if isinstance(data.get("broker"), str)
         else os.getenv("TRADER_BROKER", "simulated")
     )
-    
+
     miniQMT = data.get("miniQMT") if isinstance(data.get("miniQMT"), dict) else {}
-    
+
     securities_account_id = (
         data.get("securities_account_id")
         if isinstance(data.get("securities_account_id"), str)
@@ -98,8 +162,13 @@ def load_config(config_path: str | None = None) -> TraderConfig:
             fee_model[field_name] = value
 
     return TraderConfig(
-        api_base_url=str(api_base_url).rstrip("/"),
-        api_token=str(api_token),
+        backend_mode=backend_mode,
+        mongo_uri=mongo_uri,
+        mongo_db=str(mongo_db),
+        user_id=user_id,
+        api_fallback_enabled=api_fallback_enabled,
+        api_base_url=str(api_base_url).rstrip("/") if api_base_url else "",
+        api_token=str(api_token) if api_token else "",
         poll_interval=poll_interval,
         log_level=str(log_level),
         broker=str(broker),

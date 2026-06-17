@@ -1,0 +1,13 @@
+{
+  "backend_mode": "db",
+  "mongo_uri": "mongodb://127.0.0.1:27017",
+  "mongo_db": "finance",
+  "user_id": "REPLACE_WITH_YOUR_USERS_COLLECTION_ID_STRING",
+  "securities_account_id": "REPLACE_WITH_SECURITIES_ACCOUNTS_OBJECTID_HEX",
+  "poll_interval": 1.0,
+  "log_level": "INFO",
+  "broker": "simulated",
+  "_comment_api": "Optional: set backend_mode to api and fill api_base_url + api_token to use REST only.",
+  "api_base_url": "",
+  "api_token": ""
+}
