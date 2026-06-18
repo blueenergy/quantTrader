@@ -90,7 +90,9 @@ class ExecutionTracker:
         # In-memory tracking of pending executions
         self._pending_executions: Dict[str, ExecutionRecord] = {}
         self._broker_to_order_map: Dict[str, str] = {}  # broker_order_id -> order_id
-        
+        # Throttle broker cancel retries while cancel_requested but entrust still in query list
+        self._next_cancel_retry_at: Dict[str, float] = {}
+
         # Configuration
         self.max_retries = 3
         self.retry_delay = 5.0
@@ -262,7 +264,8 @@ class ExecutionTracker:
         # Get current broker status (this would be implemented in the broker adapter)
         try:
             broker_executions = self.broker.get_execution_status()
-            
+            now_ts = time.time()
+
             for broker_order_id, broker_status in broker_executions.items():
                 broker_order_id = str(broker_order_id)
                 order_id = self._broker_to_order_map.get(broker_order_id)
@@ -327,6 +330,57 @@ class ExecutionTracker:
                 }
                 self._update_execution_in_backend(execution, broker_status)
                 self._complete_execution(order_id)
+
+            # cancel_requested -> cancelled only ran above when this entrust id disappeared
+            # from query_stock_orders. If QMT still lists the row as active, retry cancel and
+            # optionally force a DB terminal after a max age (env, default off).
+            retry_grace = float(os.environ.get("QUANT_TRADER_CANCEL_RETRY_GRACE_SECONDS", "15"))
+            retry_interval = float(os.environ.get("QUANT_TRADER_CANCEL_RETRY_INTERVAL_SECONDS", "25"))
+            force_after = float(os.environ.get("QUANT_TRADER_CANCEL_REQUESTED_FORCE_CANCELLED_AFTER_SECONDS", "0"))
+
+            for order_id, execution in list(self._pending_executions.items()):
+                if execution.status != ExecutionStatus.CANCEL_REQUESTED:
+                    continue
+                bid = execution.broker_order_id
+                if not bid or not execution.cancel_requested_at:
+                    continue
+                age = now_ts - float(execution.cancel_requested_at)
+                if age < retry_grace:
+                    continue
+                if str(bid) not in broker_executions:
+                    continue
+                if force_after > 0 and age > force_after:
+                    self.logger.warning(
+                        "Forcing cancelled after cancel_requested max age: client_order_id=%s "
+                        "broker_order_id=%s age_s=%.0f force_after_s=%.0f "
+                        "(set QUANT_TRADER_CANCEL_REQUESTED_FORCE_CANCELLED_AFTER_SECONDS=0 to disable)",
+                        order_id,
+                        bid,
+                        age,
+                        force_after,
+                    )
+                    execution.status = ExecutionStatus.CANCELLED
+                    execution.updated_at = now_ts
+                    execution.last_error = "cancel_requested_reconciled_max_age"
+                    bstat = {
+                        "status": "cancelled",
+                        "filled_size": execution.filled_size,
+                        "avg_price": execution.filled_price,
+                        "message": execution.last_error,
+                    }
+                    self._update_execution_in_backend(execution, bstat)
+                    self._complete_execution(order_id)
+                    continue
+                if self._next_cancel_retry_at.get(str(order_id), 0) > now_ts:
+                    continue
+                self._next_cancel_retry_at[str(order_id)] = now_ts + max(1.0, retry_interval)
+                self.logger.info(
+                    "Retry broker cancel: cancel_requested but entrust still in query "
+                    "client_order_id=%s broker_order_id=%s",
+                    order_id,
+                    bid,
+                )
+                self.broker.cancel_order(str(bid), client_order_id=order_id)
 
             self._cancel_expired_pending_orders()
                     
@@ -611,6 +665,8 @@ class ExecutionTracker:
     
     def _complete_execution(self, order_id: str) -> None:
         """Remove completed execution from tracking."""
+        oid = str(order_id)
+        self._next_cancel_retry_at.pop(oid, None)
         execution = self._pending_executions.pop(order_id, None)
         if execution and execution.broker_order_id:
             self._broker_to_order_map.pop(execution.broker_order_id, None)

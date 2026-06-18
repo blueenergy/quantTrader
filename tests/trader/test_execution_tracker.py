@@ -8,6 +8,8 @@ These tests validate that:
 """
 
 from unittest.mock import Mock, MagicMock
+import time
+
 from quant_trader.execution_tracker import ExecutionTracker, ExecutionStatus
 
 
@@ -463,6 +465,82 @@ def test_poll_does_not_revert_cancel_requested_when_broker_still_submitted():
     tracker.poll_execution_status()
     assert api.signal_updates[-1]["payload"]["status"] == "cancel_requested"
     assert tracker._pending_executions["ORDER_STALE"].status == ExecutionStatus.CANCEL_REQUESTED
+
+
+def test_cancel_requested_retries_broker_cancel_when_entrust_still_listed(monkeypatch):
+    """If query still lists the entrust after cancel_requested, retry cancel on a throttle."""
+    api = FakeApiClient()
+    broker = FakeBroker()
+    cancel_n = {"n": 0}
+    orig = broker.cancel_order
+
+    def counting_cancel(bid, **kwargs):
+        cancel_n["n"] += 1
+        return orig(bid, **kwargs)
+
+    broker.cancel_order = counting_cancel
+    monkeypatch.setenv("QUANT_TRADER_CANCEL_RETRY_GRACE_SECONDS", "0")
+    monkeypatch.setenv("QUANT_TRADER_CANCEL_RETRY_INTERVAL_SECONDS", "0")
+
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+    tracker.submit_order(
+        {
+            "order_id": "ORDER_RETRY_CANCEL",
+            "symbol": "000001",
+            "action": "sell",
+            "size": 100,
+            "reference_price": 10.0,
+            "valid_until": 1,
+        }
+    )
+    broker.execution_responses = {
+        "BROKER_ORDER_RETRY_CANCEL": {
+            "status": "submitted",
+            "filled_size": 0,
+            "avg_price": None,
+        }
+    }
+    tracker.poll_execution_status()
+    assert cancel_n["n"] >= 1
+    n_after_expire = cancel_n["n"]
+
+    ex = tracker._pending_executions["ORDER_RETRY_CANCEL"]
+    ex.cancel_requested_at = time.time() - 999
+    tracker._next_cancel_retry_at.clear()
+    tracker.poll_execution_status()
+    assert cancel_n["n"] > n_after_expire
+
+
+def test_cancel_requested_force_cancelled_when_max_age_env(monkeypatch):
+    monkeypatch.setenv("QUANT_TRADER_CANCEL_REQUESTED_FORCE_CANCELLED_AFTER_SECONDS", "1")
+    api = FakeApiClient()
+    broker = FakeBroker()
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+    tracker.submit_order(
+        {
+            "order_id": "ORDER_FORCE_AGE",
+            "symbol": "000001",
+            "action": "sell",
+            "size": 100,
+            "reference_price": 10.0,
+            "valid_until": 1,
+        }
+    )
+    broker.execution_responses = {
+        "BROKER_ORDER_FORCE_AGE": {
+            "status": "submitted",
+            "filled_size": 0,
+            "avg_price": None,
+        }
+    }
+    tracker.poll_execution_status()
+    ex = tracker._pending_executions["ORDER_FORCE_AGE"]
+    ex.cancel_requested_at = time.time() - 60
+    tracker.poll_execution_status()
+
+    assert "ORDER_FORCE_AGE" not in tracker._pending_executions
+    assert api.signal_updates[-1]["payload"]["status"] == "cancelled"
+    assert api.signal_updates[-1]["payload"]["last_error"] == "cancel_requested_reconciled_max_age"
 
 
 def test_expired_buy_order_requests_cancel():
