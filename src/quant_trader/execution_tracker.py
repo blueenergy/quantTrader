@@ -5,6 +5,7 @@ with real execution status from the broker.
 """
 
 import logging
+import os
 import time
 from typing import Any, Dict, Optional, Union
 from dataclasses import dataclass, field
@@ -72,6 +73,7 @@ class ExecutionRecord:
     effective_limit_price: Optional[float] = None
     fee_model: Dict[str, Any] = field(default_factory=dict)
     valid_until: Optional[float] = None
+    submitted_at: Optional[float] = None
     last_status_change_at: float = field(default_factory=time.time)
     cancel_requested_at: Optional[float] = None
 
@@ -93,6 +95,7 @@ class ExecutionTracker:
         self.max_retries = 3
         self.retry_delay = 5.0
         self.order_timeout_seconds = 90.0
+        self.buy_order_timeout_seconds = float(os.environ.get("QUANT_TRADER_BUY_ORDER_TIMEOUT_SECONDS", "3600"))
     
     def submit_order(self, signal: Dict[str, Any]) -> bool:
         """Submit an order and track its execution lifecycle."""
@@ -148,6 +151,7 @@ class ExecutionTracker:
             execution.broker_order_id = broker_order_id
             execution.status = ExecutionStatus.SUBMITTED
             execution.updated_at = time.time()
+            execution.submitted_at = execution.updated_at
             
             # Store in tracking
             self._pending_executions[order_id] = execution
@@ -203,6 +207,10 @@ class ExecutionTracker:
             return True
             
         try:
+            _base_ts = (
+                self._timestamp_or_none(signal.get("submitted_at") or signal.get("timestamp"))
+                or float(signal.get("updated_at") or time.time())
+            )
             # Create execution record
             execution = ExecutionRecord(
                 order_id=order_id,
@@ -214,6 +222,8 @@ class ExecutionTracker:
                 filled_size=int(signal.get("filled_qty", 0) or 0),
                 broker_order_id=str(broker_order_id),
                 status=self._status_from_signal(signal.get("status")),
+                created_at=_base_ts,
+                submitted_at=_base_ts,
                 updated_at=float(signal.get("updated_at") or signal.get("submitted_at") or time.time()),
                 securities_account_id=signal.get("securities_account_id"),
                 account_id=signal.get("account_id"),
@@ -231,7 +241,7 @@ class ExecutionTracker:
                 fee_model=signal.get("fee_model") or {},
                 valid_until=self._timestamp_or_none(signal.get("valid_until")),
             )
-            
+
             # Add to tracking
             self._pending_executions[order_id] = execution
             self._broker_to_order_map[str(broker_order_id)] = order_id
@@ -289,7 +299,7 @@ class ExecutionTracker:
                                  ExecutionStatus.CANCELLED, ExecutionStatus.PARTIAL_CANCELLED, ExecutionStatus.FAILED]:
                     self._complete_execution(order_id)
 
-            self._cancel_expired_sell_orders()
+            self._cancel_expired_pending_orders()
                     
         except Exception as e:
             self.logger.error("Error polling execution status: %s", e)
@@ -326,31 +336,42 @@ class ExecutionTracker:
                 prepared["order_type"] = "limit"
         return prepared
 
-    def _cancel_expired_sell_orders(self) -> None:
+    def _cancel_expired_pending_orders(self) -> None:
         now = time.time()
         for order_id, execution in list(self._pending_executions.items()):
-            if str(execution.action).lower() != "sell":
+            action = str(execution.action).lower()
+            if action not in {"sell", "buy"}:
                 continue
             if execution.status not in {ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIAL_FILLED}:
                 continue
             if execution.cancel_requested_at:
                 continue
-            expires_at = execution.valid_until or (execution.created_at + self.order_timeout_seconds)
+            timeout = (
+                self.buy_order_timeout_seconds if action == "buy" else self.order_timeout_seconds
+            )
+            expires_at = execution.valid_until or (execution.created_at + timeout)
             if now < expires_at:
                 continue
             if not execution.broker_order_id:
                 continue
             if not self.broker.cancel_order(execution.broker_order_id):
-                self.logger.warning("Sell order expired but broker cancel was not accepted: %s", order_id)
+                self.logger.warning(
+                    "Order expired but broker cancel was not accepted: %s (%s)", order_id, action
+                )
                 continue
             execution.cancel_requested_at = now
             execution.updated_at = now
             execution.status = ExecutionStatus.CANCEL_REQUESTED
             remaining_size = self._remaining_size(execution)
             chase_suggestion = self._build_chase_suggestion(execution, remaining_size)
+            last_error = (
+                "buy_order_expired_cancel_requested"
+                if action == "buy"
+                else "sell_order_expired_cancel_requested"
+            )
             self.api_client.update_signal_status(order_id, {
                 "status": ExecutionStatus.CANCEL_REQUESTED.value,
-                "last_error": "sell_order_expired_cancel_requested",
+                "last_error": last_error,
                 "cancel_requested_at": now,
                 "filled_qty": execution.filled_size,
                 "avg_price": execution.filled_price,
@@ -366,12 +387,17 @@ class ExecutionTracker:
         remaining = self._remaining_size(execution) if remaining_size is None else remaining_size
         next_slippage_bps = int(execution.max_slippage_bps or 100) + 30
         reference_price = execution.reference_price or execution.effective_limit_price or execution.target_price
+        action = str(execution.action or "").lower()
         suggested_price = None
         if reference_price:
-            suggested_price = self._protected_limit_price(reference_price, next_slippage_bps, action="sell")
+            suggested_price = self._protected_limit_price(
+                reference_price, next_slippage_bps, action=action if action in {"buy", "sell"} else "sell"
+            )
+        reason = "buy_order_expired" if action == "buy" else "sell_order_expired"
         return {
             "mode": "manual_review",
-            "reason": "sell_order_expired",
+            "reason": reason,
+            "action": action,
             "remaining_size": remaining,
             "reference_price": reference_price,
             "current_limit_price": execution.effective_limit_price,
@@ -436,6 +462,20 @@ class ExecutionTracker:
             return ExecutionStatus.SUBMITTED
         else:
             return ExecutionStatus.SUBMITTED  # Still processing
+
+    @staticmethod
+    def _extract_last_market_price(broker_status: Dict[str, Any]) -> Optional[float]:
+        for key in ("last_price", "market_price", "current_price", "price", "close"):
+            v = broker_status.get(key)
+            if v is None:
+                continue
+            try:
+                f = float(v)
+                if f > 0:
+                    return f
+            except (TypeError, ValueError):
+                continue
+        return None
 
     def _status_from_signal(self, status: Any) -> ExecutionStatus:
         text = str(status or "").lower()
@@ -509,7 +549,23 @@ class ExecutionTracker:
             if execution.status in [ExecutionStatus.FILLED, ExecutionStatus.REJECTED,
                                    ExecutionStatus.CANCELLED, ExecutionStatus.PARTIAL_CANCELLED, ExecutionStatus.FAILED]:
                 signal_update["executed_at"] = execution.updated_at
-            
+
+            if execution.status in {ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIAL_FILLED}:
+                now_ts = float(execution.updated_at)
+                base_ts = float(execution.submitted_at or execution.created_at)
+                signal_update["submitted_age_seconds"] = max(0.0, now_ts - base_ts)
+                signal_update["broker_status"] = str(broker_status.get("status") or "")
+                signal_update["broker_status_msg"] = str(
+                    broker_status.get("message")
+                    or broker_status.get("status_msg")
+                    or broker_status.get("error_msg")
+                    or ""
+                )
+                signal_update["last_status_checked_at"] = now_ts
+                lm = self._extract_last_market_price(broker_status)
+                if lm is not None:
+                    signal_update["last_market_price"] = lm
+
             self.api_client.update_signal_status(execution.order_id, signal_update)
             
         except Exception as e:

@@ -259,6 +259,8 @@ def test_attach_existing_order_preserves_live_signal_metadata():
     assert execution.broker == "miniQMT"
     assert execution.mode == "live"
     assert execution.strategy == "portfolio_s1"
+    assert execution.created_at == 12345.0
+    assert execution.submitted_at == 12345.0
     assert tracker._broker_to_order_map["987654"] == "ORDER_RECOVER"
 
 
@@ -399,8 +401,44 @@ def test_expired_sell_order_requests_cancel():
     suggestion = api.signal_updates[-1]["payload"]["chase_suggestion"]
     assert suggestion["auto_resubmit"] is False
     assert suggestion["mode"] == "manual_review"
+    assert suggestion["reason"] == "sell_order_expired"
     assert suggestion["remaining_size"] == 100
     assert suggestion["suggested_limit_price"] == 9.87
+
+
+def test_expired_buy_order_requests_cancel():
+    api = FakeApiClient()
+    broker = FakeBroker()
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+    tracker.buy_order_timeout_seconds = 0.0
+    tracker.submit_order(
+        {
+            "order_id": "ORDER_BUY_EXPIRE",
+            "symbol": "000001",
+            "action": "buy",
+            "size": 100,
+            "price_ceiling": 10.5,
+            "reference_price": 10.0,
+            "max_slippage_bps": 100,
+        }
+    )
+    broker.execution_responses = {
+        "BROKER_ORDER_BUY_EXPIRE": {
+            "status": "submitted",
+            "filled_size": 0,
+            "avg_price": None,
+            "last_price": 10.2,
+        }
+    }
+
+    tracker.poll_execution_status()
+
+    assert api.signal_updates[-1]["payload"]["status"] == "cancel_requested"
+    assert api.signal_updates[-1]["payload"]["last_error"] == "buy_order_expired_cancel_requested"
+    suggestion = api.signal_updates[-1]["payload"]["chase_suggestion"]
+    assert suggestion["reason"] == "buy_order_expired"
+    assert suggestion["action"] == "buy"
+    assert suggestion["auto_resubmit"] is False
 
 
 def test_partial_cancelled_records_remaining_size_and_chase_suggestion():
