@@ -13,5 +13,11 @@
     "xt_path": "C:\\国金QMT交易端模拟\\userdata_mini",
     "account_id": "62666676"
   },
-  "_comment": "Default backend is MongoDB (backend_mode db). Set backend_mode to api to use only REST. Symbol format: exchange suffix (e.g., 000858.SZ, 600519.SH)."
+  "execution": {
+    "buy_order_timeout_seconds": 3600,
+    "cancel_retry_grace_seconds": 15,
+    "cancel_retry_interval_seconds": 25,
+    "cancel_requested_force_cancelled_after_seconds": 0
+  },
+  "_comment": "Default backend is MongoDB (backend_mode db). Set backend_mode to api to use only REST. Symbol format: exchange suffix (e.g., 000858.SZ, 600519.SH). Optional execution block: tune live buy timeout and cancel_requested retry/force; same keys can be overridden with env QUANT_TRADER_* (env wins over JSON)."
 }
