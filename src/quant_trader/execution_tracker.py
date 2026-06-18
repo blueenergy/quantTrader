@@ -81,7 +81,17 @@ class ExecutionRecord:
 class ExecutionTracker:
     """Tracks order execution lifecycle from submission to completion."""
     
-    def __init__(self, api_client: TraderBackend, broker: BrokerAdapter, fee_model: Optional[TradeFeeModel] = None):
+    def __init__(
+        self,
+        api_client: TraderBackend,
+        broker: BrokerAdapter,
+        fee_model: Optional[TradeFeeModel] = None,
+        *,
+        buy_order_timeout_seconds: Optional[float] = None,
+        cancel_retry_grace_seconds: Optional[float] = None,
+        cancel_retry_interval_seconds: Optional[float] = None,
+        cancel_requested_force_cancelled_after_seconds: Optional[float] = None,
+    ):
         self.api_client = api_client
         self.broker = broker
         self.fee_model = fee_model or TradeFeeModel()
@@ -93,11 +103,30 @@ class ExecutionTracker:
         # Throttle broker cancel retries while cancel_requested but entrust still in query list
         self._next_cancel_retry_at: Dict[str, float] = {}
 
-        # Configuration
+        # Configuration (optional args from TraderConfig; else same env vars as before)
+        self.buy_order_timeout_seconds = (
+            float(buy_order_timeout_seconds)
+            if buy_order_timeout_seconds is not None
+            else float(os.environ.get("QUANT_TRADER_BUY_ORDER_TIMEOUT_SECONDS", "3600"))
+        )
+        self.cancel_retry_grace_seconds = (
+            float(cancel_retry_grace_seconds)
+            if cancel_retry_grace_seconds is not None
+            else float(os.environ.get("QUANT_TRADER_CANCEL_RETRY_GRACE_SECONDS", "15"))
+        )
+        self.cancel_retry_interval_seconds = (
+            float(cancel_retry_interval_seconds)
+            if cancel_retry_interval_seconds is not None
+            else float(os.environ.get("QUANT_TRADER_CANCEL_RETRY_INTERVAL_SECONDS", "25"))
+        )
+        self.cancel_requested_force_cancelled_after_seconds = (
+            float(cancel_requested_force_cancelled_after_seconds)
+            if cancel_requested_force_cancelled_after_seconds is not None
+            else float(os.environ.get("QUANT_TRADER_CANCEL_REQUESTED_FORCE_CANCELLED_AFTER_SECONDS", "0"))
+        )
         self.max_retries = 3
         self.retry_delay = 5.0
         self.order_timeout_seconds = 90.0
-        self.buy_order_timeout_seconds = float(os.environ.get("QUANT_TRADER_BUY_ORDER_TIMEOUT_SECONDS", "3600"))
     
     def submit_order(self, signal: Dict[str, Any]) -> bool:
         """Submit an order and track its execution lifecycle."""
@@ -334,9 +363,9 @@ class ExecutionTracker:
             # cancel_requested -> cancelled only ran above when this entrust id disappeared
             # from query_stock_orders. If QMT still lists the row as active, retry cancel and
             # optionally force a DB terminal after a max age (env, default off).
-            retry_grace = float(os.environ.get("QUANT_TRADER_CANCEL_RETRY_GRACE_SECONDS", "15"))
-            retry_interval = float(os.environ.get("QUANT_TRADER_CANCEL_RETRY_INTERVAL_SECONDS", "25"))
-            force_after = float(os.environ.get("QUANT_TRADER_CANCEL_REQUESTED_FORCE_CANCELLED_AFTER_SECONDS", "0"))
+            retry_grace = self.cancel_retry_grace_seconds
+            retry_interval = self.cancel_retry_interval_seconds
+            force_after = self.cancel_requested_force_cancelled_after_seconds
 
             for order_id, execution in list(self._pending_executions.items()):
                 if execution.status != ExecutionStatus.CANCEL_REQUESTED:

@@ -25,6 +25,9 @@ class TraderConfig:
     broker: Broker type: "simulated" or "miniQMT"
     miniQMT: miniQMT broker config (if broker="miniQMT")
     securities_account_id: MongoDB _id linking to securities_accounts collection
+
+    Optional ``execution`` object in JSON (see README): buy/cancel tuning.
+    Environment variables with the same semantics override JSON values.
     """
 
     backend_mode: str = "db"
@@ -41,6 +44,32 @@ class TraderConfig:
     miniQMT: Optional[Dict[str, Any]] = field(default_factory=dict)
     securities_account_id: Optional[str] = None
     fee_model: Dict[str, Any] = field(default_factory=dict)
+    # Execution lifecycle (env overrides JSON; see load_config)
+    buy_order_timeout_seconds: float = 3600.0
+    cancel_retry_grace_seconds: float = 15.0
+    cancel_retry_interval_seconds: float = 25.0
+    cancel_requested_force_cancelled_after_seconds: float = 0.0
+
+
+def _execution_float(
+    exec_data: Dict[str, Any],
+    json_key: str,
+    env_name: str,
+    default: float,
+) -> float:
+    """Resolve execution tuning: environment overrides JSON, then defaults."""
+    ev = os.getenv(env_name)
+    if ev not in (None, ""):
+        try:
+            return float(ev)
+        except ValueError:
+            pass
+    if json_key in exec_data and exec_data[json_key] is not None:
+        try:
+            return float(exec_data[json_key])  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            pass
+    return default
 
 
 def load_config(config_path: str | None = None) -> TraderConfig:
@@ -161,6 +190,32 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         if value not in (None, ""):
             fee_model[field_name] = value
 
+    exec_data = data.get("execution") if isinstance(data.get("execution"), dict) else {}
+    buy_order_timeout_seconds = _execution_float(
+        exec_data,
+        "buy_order_timeout_seconds",
+        "QUANT_TRADER_BUY_ORDER_TIMEOUT_SECONDS",
+        3600.0,
+    )
+    cancel_retry_grace_seconds = _execution_float(
+        exec_data,
+        "cancel_retry_grace_seconds",
+        "QUANT_TRADER_CANCEL_RETRY_GRACE_SECONDS",
+        15.0,
+    )
+    cancel_retry_interval_seconds = _execution_float(
+        exec_data,
+        "cancel_retry_interval_seconds",
+        "QUANT_TRADER_CANCEL_RETRY_INTERVAL_SECONDS",
+        25.0,
+    )
+    cancel_requested_force_cancelled_after_seconds = _execution_float(
+        exec_data,
+        "cancel_requested_force_cancelled_after_seconds",
+        "QUANT_TRADER_CANCEL_REQUESTED_FORCE_CANCELLED_AFTER_SECONDS",
+        0.0,
+    )
+
     return TraderConfig(
         backend_mode=backend_mode,
         mongo_uri=mongo_uri,
@@ -175,4 +230,8 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         miniQMT=miniQMT,
         securities_account_id=securities_account_id,
         fee_model=fee_model,
+        buy_order_timeout_seconds=buy_order_timeout_seconds,
+        cancel_retry_grace_seconds=cancel_retry_grace_seconds,
+        cancel_retry_interval_seconds=cancel_retry_interval_seconds,
+        cancel_requested_force_cancelled_after_seconds=cancel_requested_force_cancelled_after_seconds,
     )

@@ -49,6 +49,10 @@ class TraderLoop:
                 api_client=api,
                 broker=broker,
                 fee_model=self.fee_model,
+                buy_order_timeout_seconds=self.cfg.buy_order_timeout_seconds,
+                cancel_retry_grace_seconds=self.cfg.cancel_retry_grace_seconds,
+                cancel_retry_interval_seconds=self.cfg.cancel_retry_interval_seconds,
+                cancel_requested_force_cancelled_after_seconds=self.cfg.cancel_requested_force_cancelled_after_seconds,
             )
             log.info("Execution tracking ENABLED")
         self._last_heartbeat = 0.0
