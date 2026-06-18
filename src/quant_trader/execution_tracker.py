@@ -275,6 +275,14 @@ class ExecutionTracker:
                 
                 # Update execution based on broker status
                 new_status = self._map_broker_status(broker_status)
+                # Stale broker snapshots often still say submitted right after we set
+                # cancel_requested; never downgrade that in-memory state or Mongo will
+                # be overwritten back to submitted on the next poll.
+                if execution.status == ExecutionStatus.CANCEL_REQUESTED and new_status in {
+                    ExecutionStatus.SUBMITTED,
+                    ExecutionStatus.PARTIAL_FILLED,
+                }:
+                    new_status = execution.status
                 if new_status != execution.status:
                     execution.last_status_change_at = time.time()
                 execution.status = new_status

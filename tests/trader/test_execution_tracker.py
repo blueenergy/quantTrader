@@ -435,6 +435,36 @@ def test_expired_sell_order_requests_cancel():
     assert suggestion["suggested_limit_price"] == 9.87
 
 
+def test_poll_does_not_revert_cancel_requested_when_broker_still_submitted():
+    """Stale submitted snapshot must not overwrite cancel_requested in API updates."""
+    api = FakeApiClient()
+    broker = FakeBroker()
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+    tracker.submit_order(
+        {
+            "order_id": "ORDER_STALE",
+            "symbol": "000001",
+            "action": "sell",
+            "size": 100,
+            "reference_price": 10.0,
+            "valid_until": 1,
+        }
+    )
+    broker.execution_responses = {
+        "BROKER_ORDER_STALE": {
+            "status": "submitted",
+            "filled_size": 0,
+            "avg_price": None,
+        }
+    }
+    tracker.poll_execution_status()
+    assert api.signal_updates[-1]["payload"]["status"] == "cancel_requested"
+
+    tracker.poll_execution_status()
+    assert api.signal_updates[-1]["payload"]["status"] == "cancel_requested"
+    assert tracker._pending_executions["ORDER_STALE"].status == ExecutionStatus.CANCEL_REQUESTED
+
+
 def test_expired_buy_order_requests_cancel():
     api = FakeApiClient()
     broker = FakeBroker()

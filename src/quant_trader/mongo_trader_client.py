@@ -171,6 +171,13 @@ class MongoTraderClient:
                 signal_update["filled_qty"] = execution.get("filled_size")
             if execution.get("filled_price") is not None:
                 signal_update["avg_price"] = execution.get("filled_price")
+            if (
+                signal
+                and signal.get("status") == "cancel_requested"
+                and execution_status in {"submitted", "partial_filled"}
+            ):
+                signal_update.pop("status", None)
+                signal_update.pop("executed_at", None)
             self._signals.update_one(
                 {"order_id": order_id, "user_id": user_id},
                 {"$set": signal_update},
