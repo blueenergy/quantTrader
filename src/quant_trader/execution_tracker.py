@@ -299,6 +299,27 @@ class ExecutionTracker:
                                  ExecutionStatus.CANCELLED, ExecutionStatus.PARTIAL_CANCELLED, ExecutionStatus.FAILED]:
                     self._complete_execution(order_id)
 
+            # After cancel_requested, query_stock_orders often omits the entrust id even
+            # while the cancel API returned -1. If the broker snapshot no longer lists
+            # this broker_order_id, treat as cancelled so Mongo reaches a terminal state.
+            for order_id, execution in list(self._pending_executions.items()):
+                if execution.status != ExecutionStatus.CANCEL_REQUESTED:
+                    continue
+                bid = execution.broker_order_id
+                if not bid or str(bid) in broker_executions:
+                    continue
+                execution.status = ExecutionStatus.CANCELLED
+                execution.updated_at = time.time()
+                execution.last_error = "order_absent_from_broker_query_after_cancel"
+                broker_status = {
+                    "status": "cancelled",
+                    "filled_size": execution.filled_size,
+                    "avg_price": execution.filled_price,
+                    "message": execution.last_error,
+                }
+                self._update_execution_in_backend(execution, broker_status)
+                self._complete_execution(order_id)
+
             self._cancel_expired_pending_orders()
                     
         except Exception as e:
@@ -554,6 +575,9 @@ class ExecutionTracker:
             if execution.status in [ExecutionStatus.FILLED, ExecutionStatus.REJECTED,
                                    ExecutionStatus.CANCELLED, ExecutionStatus.PARTIAL_CANCELLED, ExecutionStatus.FAILED]:
                 signal_update["executed_at"] = execution.updated_at
+
+            if execution.last_error:
+                signal_update["last_error"] = execution.last_error
 
             if execution.status in {ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIAL_FILLED}:
                 now_ts = float(execution.updated_at)

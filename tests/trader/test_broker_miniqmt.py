@@ -190,8 +190,8 @@ def test_miniqmt_cancel_order_accepts_minus_one_when_query_shows_terminal(monkey
     assert trader.cancel_calls
 
 
-def test_miniqmt_cancel_order_rejects_minus_one_when_id_missing_from_query(monkeypatch):
-    """Cancel -1 and empty query_orders => False (order gone from today's API list)."""
+def test_miniqmt_cancel_order_rejects_minus_one_when_query_empty(monkeypatch):
+    """Cancel -1 and empty query_orders => False (ambiguous vs disconnected)."""
     broker, trader, _ = _broker(monkeypatch)
 
     def cancel_fail(acc, oid):
@@ -202,6 +202,36 @@ def test_miniqmt_cancel_order_rejects_minus_one_when_id_missing_from_query(monke
     trader.orders = []
 
     assert broker.cancel_order("1082165310") is False
+    assert trader.cancel_calls
+
+
+def test_miniqmt_cancel_order_accepts_minus_one_when_entrust_missing_from_nonempty_query(
+    monkeypatch,
+):
+    """When other orders exist but target id is missing, treat cancel as success."""
+    broker, trader, xtconstant = _broker(monkeypatch)
+
+    def cancel_fail(acc, oid):
+        trader.cancel_calls.append((acc, oid))
+        return -1
+
+    trader.cancel_order_stock = cancel_fail
+    trader.orders = [
+        types.SimpleNamespace(
+            order_id=999999,
+            stock_code="000001.SZ",
+            order_type=23,
+            order_status=xtconstant.ORDER_REPORTED,
+            status_msg="已报",
+            order_volume=100,
+            price=10.0,
+            traded_volume=0,
+            traded_price=0.0,
+            order_time=1700000000,
+        )
+    ]
+
+    assert broker.cancel_order("1082165310") is True
     assert trader.cancel_calls
 
 

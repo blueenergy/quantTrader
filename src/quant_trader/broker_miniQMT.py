@@ -222,6 +222,12 @@ class MiniQMTBroker(BrokerAdapter):
         ``query_stock_orders`` and treat already-terminal states as success so
         the execution tracker can advance ``cancel_requested`` / sync Mongo.
 
+        If the cancel API fails but the same query returns **other** today's
+        orders while **this** ``broker_order_id`` is missing, we treat cancel as
+        **success** (idempotent): QMT no longer lists this entrust id, so there
+        is nothing to cancel at the broker. When the query list is empty we stay
+        conservative and return failure (ambiguous vs disconnected).
+
         ``client_order_id`` is our signal ``order_id`` (e.g. live-plan-...); it is
         included in logs next to ``broker_order_id`` (QMT entrust id).
         """
@@ -275,18 +281,27 @@ class MiniQMTBroker(BrokerAdapter):
                 return False
 
             if not row:
+                n_orders = int(diag.get("query_returned_orders") or 0)
                 log.warning(
-                    "miniQMT cancel failed: client_order_id=%s broker_order_id=%s result=%s "
+                    "miniQMT cancel returned %s: client_order_id=%s broker_order_id=%s "
                     "reason=order_not_in_query_stock_orders "
                     "query_returned_orders=%s lookup_key=%s "
                     "(QMT may have dropped this id from today's list, wrong account/session, "
                     "or query lag; confirm in QMT UI)",
+                    result,
                     client_order_id or "-",
                     broker_order_id,
-                    result,
-                    diag.get("query_returned_orders"),
+                    n_orders,
                     diag.get("lookup_key"),
                 )
+                if n_orders > 0:
+                    log.info(
+                        "miniQMT cancel treating as success (idempotent): entrust id absent "
+                        "from non-empty query_stock_orders client_order_id=%s broker_order_id=%s",
+                        client_order_id or "-",
+                        broker_order_id,
+                    )
+                    return True
                 return False
 
             log.warning(

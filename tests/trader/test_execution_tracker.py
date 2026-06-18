@@ -289,6 +289,35 @@ def test_attach_existing_cancel_requested_order_preserves_tracking():
     assert tracker._broker_to_order_map["1234"] == "ORDER_CANCEL_REQ"
 
 
+def test_poll_completes_cancel_requested_when_broker_snapshot_omits_order():
+    """After cancel, entrust id often disappears from query_stock_orders before cancelled row."""
+    api = FakeApiClient()
+    broker = FakeBroker()
+    broker.execution_responses = {}
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+
+    signal = {
+        "order_id": "ORDER_VANISH",
+        "broker_order_id": 777,
+        "symbol": "000001.SZ",
+        "action": "buy",
+        "size": 200,
+        "status": "cancel_requested",
+        "filled_qty": 0,
+        "reference_price": 10.0,
+        "effective_limit_price": 10.05,
+    }
+    assert tracker.attach_existing_order(signal) is True
+    tracker.poll_execution_status()
+
+    assert "ORDER_VANISH" not in tracker._pending_executions
+    assert "777" not in tracker._broker_to_order_map
+    last = api.signal_updates[-1]
+    assert last["order_id"] == "ORDER_VANISH"
+    assert last["payload"]["status"] == "cancelled"
+    assert last["payload"]["last_error"] == "order_absent_from_broker_query_after_cancel"
+
+
 def test_sell_order_uses_protected_limit_price():
     api = FakeApiClient()
     broker = FakeBroker()
