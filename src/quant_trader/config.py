@@ -48,7 +48,6 @@ class TraderConfig:
     buy_order_timeout_seconds: float = 3600.0
     cancel_retry_grace_seconds: float = 15.0
     cancel_retry_interval_seconds: float = 25.0
-    cancel_requested_force_cancelled_after_seconds: float = 0.0
 
 
 def _execution_float(
@@ -209,12 +208,6 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         "QUANT_TRADER_CANCEL_RETRY_INTERVAL_SECONDS",
         25.0,
     )
-    cancel_requested_force_cancelled_after_seconds = _execution_float(
-        exec_data,
-        "cancel_requested_force_cancelled_after_seconds",
-        "QUANT_TRADER_CANCEL_REQUESTED_FORCE_CANCELLED_AFTER_SECONDS",
-        0.0,
-    )
 
     return TraderConfig(
         backend_mode=backend_mode,
@@ -233,5 +226,4 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         buy_order_timeout_seconds=buy_order_timeout_seconds,
         cancel_retry_grace_seconds=cancel_retry_grace_seconds,
         cancel_retry_interval_seconds=cancel_retry_interval_seconds,
-        cancel_requested_force_cancelled_after_seconds=cancel_requested_force_cancelled_after_seconds,
     )

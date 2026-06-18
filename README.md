@@ -172,8 +172,7 @@ Log rotation:
   "execution": {
     "buy_order_timeout_seconds": "optional float — live buy timeout (default 3600); env QUANT_TRADER_BUY_ORDER_TIMEOUT_SECONDS overrides",
     "cancel_retry_grace_seconds": "optional float — wait after cancel_requested before first broker cancel retry (default 15)",
-    "cancel_retry_interval_seconds": "optional float — min seconds between retries (default 25)",
-    "cancel_requested_force_cancelled_after_seconds": "optional float — force Mongo cancelled after this many seconds in cancel_requested while entrust still listed; 0 disables (default 0). Env QUANT_TRADER_CANCEL_REQUESTED_FORCE_CANCELLED_AFTER_SECONDS overrides"
+    "cancel_retry_interval_seconds": "optional float — min seconds between retries (default 25)"
   }
 }
 ```

@@ -90,7 +90,6 @@ class ExecutionTracker:
         buy_order_timeout_seconds: Optional[float] = None,
         cancel_retry_grace_seconds: Optional[float] = None,
         cancel_retry_interval_seconds: Optional[float] = None,
-        cancel_requested_force_cancelled_after_seconds: Optional[float] = None,
     ):
         self.api_client = api_client
         self.broker = broker
@@ -118,11 +117,6 @@ class ExecutionTracker:
             float(cancel_retry_interval_seconds)
             if cancel_retry_interval_seconds is not None
             else float(os.environ.get("QUANT_TRADER_CANCEL_RETRY_INTERVAL_SECONDS", "25"))
-        )
-        self.cancel_requested_force_cancelled_after_seconds = (
-            float(cancel_requested_force_cancelled_after_seconds)
-            if cancel_requested_force_cancelled_after_seconds is not None
-            else float(os.environ.get("QUANT_TRADER_CANCEL_REQUESTED_FORCE_CANCELLED_AFTER_SECONDS", "0"))
         )
         self.max_retries = 3
         self.retry_delay = 5.0
@@ -392,11 +386,9 @@ class ExecutionTracker:
                 self._complete_execution(order_id)
 
             # cancel_requested -> cancelled only ran above when this entrust id disappeared
-            # from query_stock_orders. If QMT still lists the row as active, retry cancel and
-            # optionally force a DB terminal after a max age (env, default off).
+            # from query_stock_orders. If QMT still lists the row as active, retry cancel.
             retry_grace = self.cancel_retry_grace_seconds
             retry_interval = self.cancel_retry_interval_seconds
-            force_after = self.cancel_requested_force_cancelled_after_seconds
 
             for order_id, execution in list(self._pending_executions.items()):
                 if execution.status != ExecutionStatus.CANCEL_REQUESTED:
@@ -408,28 +400,6 @@ class ExecutionTracker:
                 if age < retry_grace:
                     continue
                 if str(bid) not in broker_executions:
-                    continue
-                if force_after > 0 and age > force_after:
-                    self.logger.warning(
-                        "Forcing cancelled after cancel_requested max age: client_order_id=%s "
-                        "broker_order_id=%s age_s=%.0f force_after_s=%.0f "
-                        "(set QUANT_TRADER_CANCEL_REQUESTED_FORCE_CANCELLED_AFTER_SECONDS=0 to disable)",
-                        order_id,
-                        bid,
-                        age,
-                        force_after,
-                    )
-                    execution.status = ExecutionStatus.CANCELLED
-                    execution.updated_at = now_ts
-                    execution.last_error = "cancel_requested_reconciled_max_age"
-                    bstat = {
-                        "status": "cancelled",
-                        "filled_size": execution.filled_size,
-                        "avg_price": execution.filled_price,
-                        "message": execution.last_error,
-                    }
-                    self._update_execution_in_backend(execution, bstat)
-                    self._complete_execution(order_id)
                     continue
                 if self._next_cancel_retry_at.get(str(order_id), 0) > now_ts:
                     continue

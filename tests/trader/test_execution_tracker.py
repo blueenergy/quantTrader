@@ -554,38 +554,6 @@ def test_cancel_requested_retries_broker_cancel_when_entrust_still_listed(monkey
     assert cancel_n["n"] > n_after_expire
 
 
-def test_cancel_requested_force_cancelled_when_max_age_env(monkeypatch):
-    monkeypatch.setenv("QUANT_TRADER_CANCEL_REQUESTED_FORCE_CANCELLED_AFTER_SECONDS", "1")
-    api = FakeApiClient()
-    broker = FakeBroker()
-    tracker = ExecutionTracker(api_client=api, broker=broker)
-    tracker.submit_order(
-        {
-            "order_id": "ORDER_FORCE_AGE",
-            "symbol": "000001",
-            "action": "sell",
-            "size": 100,
-            "reference_price": 10.0,
-            "valid_until": 1,
-        }
-    )
-    broker.execution_responses = {
-        "BROKER_ORDER_FORCE_AGE": {
-            "status": "submitted",
-            "filled_size": 0,
-            "avg_price": None,
-        }
-    }
-    tracker.poll_execution_status()
-    ex = tracker._pending_executions["ORDER_FORCE_AGE"]
-    ex.cancel_requested_at = time.time() - 60
-    tracker.poll_execution_status()
-
-    assert "ORDER_FORCE_AGE" not in tracker._pending_executions
-    assert api.signal_updates[-1]["payload"]["status"] == "cancelled"
-    assert api.signal_updates[-1]["payload"]["last_error"] == "cancel_requested_reconciled_max_age"
-
-
 def test_expired_buy_order_requests_cancel():
     api = FakeApiClient()
     broker = FakeBroker()

@@ -79,7 +79,6 @@ def test_load_config_execution_json_and_env_override(tmp_path, monkeypatch):
                     "buy_order_timeout_seconds": 120,
                     "cancel_retry_grace_seconds": 5,
                     "cancel_retry_interval_seconds": 10,
-                    "cancel_requested_force_cancelled_after_seconds": 0,
                 },
             }
         ),
@@ -89,7 +88,6 @@ def test_load_config_execution_json_and_env_override(tmp_path, monkeypatch):
     assert cfg.buy_order_timeout_seconds == 120
     assert cfg.cancel_retry_grace_seconds == 5
     assert cfg.cancel_retry_interval_seconds == 10
-    assert cfg.cancel_requested_force_cancelled_after_seconds == 0
 
     monkeypatch.setenv("QUANT_TRADER_BUY_ORDER_TIMEOUT_SECONDS", "999")
     cfg2 = load_config(str(p))
