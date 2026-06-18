@@ -6,7 +6,7 @@ Integrates with XtQuant (miniQMT) Python API for real order execution on Windows
 
 import logging
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from quant_trader.broker_base import BrokerAdapter
 
@@ -175,10 +175,39 @@ class MiniQMTBroker(BrokerAdapter):
             log.exception("Failed to place order via miniQMT: %s", e)
             raise RuntimeError(f"miniQMT order failed: {e}") from e
 
-    def cancel_order(self, broker_order_id: str) -> bool:
-        """Cancel an outstanding miniQMT order."""
+    _TERMINAL_QUERY_STATUSES = frozenset(
+        {"cancelled", "filled", "partial_cancelled", "rejected"}
+    )
+
+    def _order_row_from_query(self, broker_order_id: str) -> Optional[Dict[str, Any]]:
+        """Return query_orders() row for this broker order id, if any."""
+        try:
+            oid = int(str(broker_order_id).strip())
+        except (TypeError, ValueError):
+            return None
+        orders = self.query_orders()
+        if not orders:
+            return None
+        return orders.get(str(oid))
+
+    def cancel_order(self, broker_order_id: str, *, client_order_id: Optional[str] = None) -> bool:
+        """Cancel an outstanding miniQMT order.
+
+        xtquant often returns ``0`` on success. ``-1`` is a generic failure but
+        commonly occurs when the order is already finished (filled/cancelled)
+        or outside cancelable session rules. In that case we re-query
+        ``query_stock_orders`` and treat already-terminal states as success so
+        the execution tracker can advance ``cancel_requested`` / sync Mongo.
+
+        ``client_order_id`` is our signal ``order_id`` (e.g. live-plan-...); it is
+        included in logs next to ``broker_order_id`` (QMT entrust id).
+        """
         if not self.xt_trader or not self.acc:
-            log.warning("miniQMT not connected, cannot cancel order")
+            log.warning(
+                "miniQMT not connected, cannot cancel order client_order_id=%s broker_order_id=%s",
+                client_order_id or "-",
+                broker_order_id,
+            )
             return False
         try:
             order_id = int(broker_order_id)
@@ -187,10 +216,45 @@ class MiniQMTBroker(BrokerAdapter):
                 log.warning("miniQMT cancel API is not available")
                 return False
             result = cancel_fn(self.acc, order_id)
-            log.info("miniQMT cancel requested: broker_order_id=%s result=%s", broker_order_id, result)
-            return result == 0 or result is True
+            log.info(
+                "miniQMT cancel requested: client_order_id=%s broker_order_id=%s result=%s",
+                client_order_id or "-",
+                broker_order_id,
+                result,
+            )
+            if result == 0 or result is True:
+                return True
+
+            row = self._order_row_from_query(broker_order_id)
+            if row and row.get("status") in self._TERMINAL_QUERY_STATUSES:
+                log.info(
+                    "miniQMT cancel returned %r but order already terminal in query: "
+                    "client_order_id=%s broker_order_id=%s status=%s msg=%s",
+                    result,
+                    client_order_id or "-",
+                    broker_order_id,
+                    row.get("status"),
+                    row.get("status_msg"),
+                )
+                return True
+
+            log.warning(
+                "miniQMT cancel failed: client_order_id=%s broker_order_id=%s result=%s "
+                "query_status=%s msg=%s (check trading session, QMT client, or whether order still exists)",
+                client_order_id or "-",
+                broker_order_id,
+                result,
+                (row or {}).get("status"),
+                (row or {}).get("status_msg"),
+            )
+            return False
         except Exception as e:
-            log.exception("Failed to cancel miniQMT order %s: %s", broker_order_id, e)
+            log.exception(
+                "Failed to cancel miniQMT order client_order_id=%s broker_order_id=%s: %s",
+                client_order_id or "-",
+                broker_order_id,
+                e,
+            )
             return False
     
     def query_positions(self) -> Dict[str, Dict[str, Any]]:

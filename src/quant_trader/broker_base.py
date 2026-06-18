@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 
 class BrokerAdapter(ABC):
@@ -76,8 +76,11 @@ class BrokerAdapter(ABC):
         """
         return {}
 
-    def cancel_order(self, broker_order_id: str) -> bool:
+    def cancel_order(self, broker_order_id: str, *, client_order_id: Optional[str] = None) -> bool:
         """Cancel an outstanding broker order if supported.
+
+        ``client_order_id`` is our signal ``order_id`` (e.g. live-plan-...); pass it
+        so broker logs can be correlated with miniQMT ``broker_order_id``.
 
         Implementations should return True only when the cancel request was
         accepted by the broker. The final cancel/fill state still comes from

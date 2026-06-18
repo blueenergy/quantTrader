@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from .broker_base import BrokerAdapter
 
@@ -55,7 +55,7 @@ class SimulatedBroker(BrokerAdapter):
         """
         return dict(self._orders)
 
-    def cancel_order(self, broker_order_id: str) -> bool:
+    def cancel_order(self, broker_order_id: str, *, client_order_id: Optional[str] = None) -> bool:
         order = self._orders.get(str(broker_order_id))
         if not order:
             return False

@@ -354,9 +354,13 @@ class ExecutionTracker:
                 continue
             if not execution.broker_order_id:
                 continue
-            if not self.broker.cancel_order(execution.broker_order_id):
+            if not self.broker.cancel_order(execution.broker_order_id, client_order_id=order_id):
                 self.logger.warning(
-                    "Order expired but broker cancel was not accepted: %s (%s)", order_id, action
+                    "Order expired but broker cancel was not accepted: client_order_id=%s "
+                    "broker_order_id=%s action=%s",
+                    order_id,
+                    execution.broker_order_id,
+                    action,
                 )
                 continue
             execution.cancel_requested_at = now

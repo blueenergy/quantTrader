@@ -50,7 +50,7 @@ class FakeBroker:
     def get_account_info(self):
         return self.account_info
 
-    def cancel_order(self, broker_order_id):
+    def cancel_order(self, broker_order_id, **kwargs):
         return True
 
 

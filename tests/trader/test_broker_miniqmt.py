@@ -163,6 +163,33 @@ def test_miniqmt_cancel_order_calls_broker_api(monkeypatch):
     assert order_id == 123456
 
 
+def test_miniqmt_cancel_order_accepts_minus_one_when_query_shows_terminal(monkeypatch):
+    broker, trader, xtconstant = _broker(monkeypatch)
+
+    def cancel_fail(acc, oid):
+        trader.cancel_calls.append((acc, oid))
+        return -1
+
+    trader.cancel_order_stock = cancel_fail
+    trader.orders = [
+        types.SimpleNamespace(
+            order_id=123456,
+            stock_code="000001.SZ",
+            order_type=23,
+            order_status=xtconstant.ORDER_CANCELED,
+            status_msg="已撤",
+            order_volume=100,
+            price=10.0,
+            traded_volume=0,
+            traded_price=0.0,
+            order_time=1700000000,
+        )
+    ]
+
+    assert broker.cancel_order("123456") is True
+    assert trader.cancel_calls
+
+
 def test_miniqmt_execution_status_includes_real_fee_fields(monkeypatch):
     broker, trader, _ = _broker(monkeypatch)
     order = types.SimpleNamespace(
