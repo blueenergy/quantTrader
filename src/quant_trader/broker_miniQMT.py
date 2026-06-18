@@ -222,11 +222,9 @@ class MiniQMTBroker(BrokerAdapter):
         ``query_stock_orders`` and treat already-terminal states as success so
         the execution tracker can advance ``cancel_requested`` / sync Mongo.
 
-        If the cancel API fails but the same query returns **other** today's
-        orders while **this** ``broker_order_id`` is missing, we treat cancel as
-        **success** (idempotent): QMT no longer lists this entrust id, so there
-        is nothing to cancel at the broker. When the query list is empty we stay
-        conservative and return failure (ambiguous vs disconnected).
+        If the cancel API fails but the same query no longer lists this
+        ``broker_order_id``, we treat cancel as **success** (idempotent): QMT has
+        no live entrust row for it, including when today's order list is empty.
 
         ``client_order_id`` is our signal ``order_id`` (e.g. live-plan-...); it is
         included in logs next to ``broker_order_id`` (QMT entrust id).
@@ -294,15 +292,15 @@ class MiniQMTBroker(BrokerAdapter):
                     n_orders,
                     diag.get("lookup_key"),
                 )
-                if n_orders > 0:
-                    log.info(
-                        "miniQMT cancel treating as success (idempotent): entrust id absent "
-                        "from non-empty query_stock_orders client_order_id=%s broker_order_id=%s",
-                        client_order_id or "-",
-                        broker_order_id,
-                    )
-                    return True
-                return False
+                log.info(
+                    "miniQMT cancel treating as success (idempotent): entrust id absent "
+                    "from query_stock_orders client_order_id=%s broker_order_id=%s "
+                    "query_returned_orders=%s",
+                    client_order_id or "-",
+                    broker_order_id,
+                    n_orders,
+                )
+                return True
 
             log.warning(
                 "miniQMT cancel failed: client_order_id=%s broker_order_id=%s result=%s "

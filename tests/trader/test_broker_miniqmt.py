@@ -190,8 +190,8 @@ def test_miniqmt_cancel_order_accepts_minus_one_when_query_shows_terminal(monkey
     assert trader.cancel_calls
 
 
-def test_miniqmt_cancel_order_rejects_minus_one_when_query_empty(monkeypatch):
-    """Cancel -1 and empty query_orders => False (ambiguous vs disconnected)."""
+def test_miniqmt_cancel_order_accepts_minus_one_when_query_empty(monkeypatch):
+    """Cancel -1 and empty query_orders => True (no live entrust rows)."""
     broker, trader, _ = _broker(monkeypatch)
 
     def cancel_fail(acc, oid):
@@ -201,14 +201,14 @@ def test_miniqmt_cancel_order_rejects_minus_one_when_query_empty(monkeypatch):
     trader.cancel_order_stock = cancel_fail
     trader.orders = []
 
-    assert broker.cancel_order("1082165310") is False
+    assert broker.cancel_order("1082165310") is True
     assert trader.cancel_calls
 
 
-def test_miniqmt_cancel_order_accepts_minus_one_when_entrust_missing_from_nonempty_query(
+def test_miniqmt_cancel_order_accepts_minus_one_when_entrust_missing_from_query(
     monkeypatch,
 ):
-    """When other orders exist but target id is missing, treat cancel as success."""
+    """When the target id is missing, treat cancel as success."""
     broker, trader, xtconstant = _broker(monkeypatch)
 
     def cancel_fail(acc, oid):

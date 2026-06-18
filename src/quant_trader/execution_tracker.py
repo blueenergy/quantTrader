@@ -333,9 +333,8 @@ class ExecutionTracker:
                                  ExecutionStatus.CANCELLED, ExecutionStatus.PARTIAL_CANCELLED, ExecutionStatus.FAILED]:
                     self._complete_execution(order_id)
 
-            # Submitted / partial: entrust id missing from today's query while other orders
-            # exist — broker dropped this row; reconcile to cancelled (no cancel_requested step).
-            n_broker = len(broker_executions)
+            # Submitted / partial: entrust id missing from today's query means QMT
+            # has no live row for this order; reconcile to cancelled (no cancel_requested step).
             for order_id, execution in list(self._pending_executions.items()):
                 if execution.status not in {ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIAL_FILLED}:
                     continue
@@ -343,8 +342,6 @@ class ExecutionTracker:
                 if not bid:
                     continue
                 if str(bid) in broker_executions:
-                    continue
-                if n_broker <= 0:
                     continue
                 execution.status = ExecutionStatus.CANCELLED
                 execution.updated_at = now_ts
@@ -357,9 +354,10 @@ class ExecutionTracker:
                 }
                 self.logger.info(
                     "Reconciled submitted/partial to cancelled: entrust id absent from broker "
-                    "query (non-empty list) client_order_id=%s broker_order_id=%s",
+                    "query client_order_id=%s broker_order_id=%s broker_query_count=%s",
                     order_id,
                     bid,
+                    len(broker_executions),
                 )
                 self._update_execution_in_backend(execution, broker_status)
                 self._complete_execution(order_id)
