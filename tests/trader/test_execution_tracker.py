@@ -467,6 +467,49 @@ def test_poll_does_not_revert_cancel_requested_when_broker_still_submitted():
     assert tracker._pending_executions["ORDER_STALE"].status == ExecutionStatus.CANCEL_REQUESTED
 
 
+def test_poll_reconciles_submitted_when_entrust_missing_from_nonempty_broker_list():
+    """If today's query lists other orders but not our broker_order_id, mark cancelled."""
+    api = FakeApiClient()
+    broker = FakeBroker()
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+    tracker.submit_order(
+        {
+            "order_id": "ORDER_ORPHAN",
+            "symbol": "000001",
+            "action": "buy",
+            "size": 100,
+            "price_ceiling": 10.5,
+        }
+    )
+    broker.execution_responses = {
+        "999999": {"status": "submitted", "filled_size": 0, "avg_price": None},
+    }
+    tracker.poll_execution_status()
+    assert "ORDER_ORPHAN" not in tracker._pending_executions
+    assert api.signal_updates[-1]["payload"]["status"] == "cancelled"
+    assert api.signal_updates[-1]["payload"]["last_error"] == "submitted_entrust_absent_from_broker_query"
+
+
+def test_poll_does_not_reconcile_submitted_when_broker_query_empty():
+    """Empty broker list is ambiguous (disconnect); do not mass-cancel submitted."""
+    api = FakeApiClient()
+    broker = FakeBroker()
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+    tracker.submit_order(
+        {
+            "order_id": "ORDER_NO_RECON",
+            "symbol": "000001",
+            "action": "buy",
+            "size": 100,
+            "price_ceiling": 10.5,
+        }
+    )
+    broker.execution_responses = {}
+    tracker.poll_execution_status()
+    assert "ORDER_NO_RECON" in tracker._pending_executions
+    assert tracker._pending_executions["ORDER_NO_RECON"].status == ExecutionStatus.SUBMITTED
+
+
 def test_cancel_requested_retries_broker_cancel_when_entrust_still_listed(monkeypatch):
     """If query still lists the entrust after cancel_requested, retry cancel on a throttle."""
     api = FakeApiClient()

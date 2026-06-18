@@ -339,6 +339,37 @@ class ExecutionTracker:
                                  ExecutionStatus.CANCELLED, ExecutionStatus.PARTIAL_CANCELLED, ExecutionStatus.FAILED]:
                     self._complete_execution(order_id)
 
+            # Submitted / partial: entrust id missing from today's query while other orders
+            # exist — broker dropped this row; reconcile to cancelled (no cancel_requested step).
+            n_broker = len(broker_executions)
+            for order_id, execution in list(self._pending_executions.items()):
+                if execution.status not in {ExecutionStatus.SUBMITTED, ExecutionStatus.PARTIAL_FILLED}:
+                    continue
+                bid = execution.broker_order_id
+                if not bid:
+                    continue
+                if str(bid) in broker_executions:
+                    continue
+                if n_broker <= 0:
+                    continue
+                execution.status = ExecutionStatus.CANCELLED
+                execution.updated_at = now_ts
+                execution.last_error = "submitted_entrust_absent_from_broker_query"
+                broker_status = {
+                    "status": "cancelled",
+                    "filled_size": execution.filled_size,
+                    "avg_price": execution.filled_price,
+                    "message": execution.last_error,
+                }
+                self.logger.info(
+                    "Reconciled submitted/partial to cancelled: entrust id absent from broker "
+                    "query (non-empty list) client_order_id=%s broker_order_id=%s",
+                    order_id,
+                    bid,
+                )
+                self._update_execution_in_backend(execution, broker_status)
+                self._complete_execution(order_id)
+
             # After cancel_requested, query_stock_orders often omits the entrust id even
             # while the cancel API returned -1. If the broker snapshot no longer lists
             # this broker_order_id, treat as cancelled so Mongo reaches a terminal state.
