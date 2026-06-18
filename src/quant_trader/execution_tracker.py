@@ -357,7 +357,8 @@ class ExecutionTracker:
             if not self.broker.cancel_order(execution.broker_order_id, client_order_id=order_id):
                 self.logger.warning(
                     "Order expired but broker cancel was not accepted: client_order_id=%s "
-                    "broker_order_id=%s action=%s",
+                    "broker_order_id=%s action=%s (see miniQMT log line reason=... for "
+                    "not_in_query vs still_active)",
                     order_id,
                     execution.broker_order_id,
                     action,

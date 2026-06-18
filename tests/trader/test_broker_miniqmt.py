@@ -190,6 +190,21 @@ def test_miniqmt_cancel_order_accepts_minus_one_when_query_shows_terminal(monkey
     assert trader.cancel_calls
 
 
+def test_miniqmt_cancel_order_rejects_minus_one_when_id_missing_from_query(monkeypatch):
+    """Cancel -1 and empty query_orders => False (order gone from today's API list)."""
+    broker, trader, _ = _broker(monkeypatch)
+
+    def cancel_fail(acc, oid):
+        trader.cancel_calls.append((acc, oid))
+        return -1
+
+    trader.cancel_order_stock = cancel_fail
+    trader.orders = []
+
+    assert broker.cancel_order("1082165310") is False
+    assert trader.cancel_calls
+
+
 def test_miniqmt_execution_status_includes_real_fee_fields(monkeypatch):
     broker, trader, _ = _broker(monkeypatch)
     order = types.SimpleNamespace(

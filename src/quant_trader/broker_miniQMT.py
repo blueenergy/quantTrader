@@ -6,7 +6,7 @@ Integrates with XtQuant (miniQMT) Python API for real order execution on Windows
 
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from quant_trader.broker_base import BrokerAdapter
 
@@ -179,16 +179,39 @@ class MiniQMTBroker(BrokerAdapter):
         {"cancelled", "filled", "partial_cancelled", "rejected"}
     )
 
-    def _order_row_from_query(self, broker_order_id: str) -> Optional[Dict[str, Any]]:
-        """Return query_orders() row for this broker order id, if any."""
+    def _query_order_row_with_diag(
+        self, broker_order_id: str
+    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+        """Return (query_orders row, diagnostic) for cancel / troubleshooting logs."""
+        diagnostic: Dict[str, Any] = {
+            "lookup_raw": str(broker_order_id),
+            "lookup_key": None,
+            "query_returned_orders": None,
+            "matched": False,
+            "parse_error": None,
+        }
         try:
             oid = int(str(broker_order_id).strip())
-        except (TypeError, ValueError):
-            return None
+        except (TypeError, ValueError) as exc:
+            diagnostic["parse_error"] = str(exc)
+            return None, diagnostic
+
+        key = str(oid)
+        diagnostic["lookup_key"] = key
         orders = self.query_orders()
         if not orders:
-            return None
-        return orders.get(str(oid))
+            diagnostic["query_returned_orders"] = 0
+            return None, diagnostic
+
+        diagnostic["query_returned_orders"] = len(orders)
+        row = orders.get(key)
+        diagnostic["matched"] = row is not None
+        return row, diagnostic
+
+    def _order_row_from_query(self, broker_order_id: str) -> Optional[Dict[str, Any]]:
+        """Return query_orders() row for this broker order id, if any."""
+        row, _ = self._query_order_row_with_diag(broker_order_id)
+        return row
 
     def cancel_order(self, broker_order_id: str, *, client_order_id: Optional[str] = None) -> bool:
         """Cancel an outstanding miniQMT order.
@@ -225,27 +248,58 @@ class MiniQMTBroker(BrokerAdapter):
             if result == 0 or result is True:
                 return True
 
-            row = self._order_row_from_query(broker_order_id)
+            row, diag = self._query_order_row_with_diag(broker_order_id)
             if row and row.get("status") in self._TERMINAL_QUERY_STATUSES:
                 log.info(
                     "miniQMT cancel returned %r but order already terminal in query: "
-                    "client_order_id=%s broker_order_id=%s status=%s msg=%s",
+                    "client_order_id=%s broker_order_id=%s status=%s msg=%s "
+                    "query_returned_orders=%s",
                     result,
                     client_order_id or "-",
                     broker_order_id,
                     row.get("status"),
                     row.get("status_msg"),
+                    diag.get("query_returned_orders"),
                 )
                 return True
 
+            if diag.get("parse_error"):
+                log.warning(
+                    "miniQMT cancel failed: client_order_id=%s broker_order_id=%s result=%s "
+                    "reason=invalid_broker_order_id parse_error=%s",
+                    client_order_id or "-",
+                    broker_order_id,
+                    result,
+                    diag.get("parse_error"),
+                )
+                return False
+
+            if not row:
+                log.warning(
+                    "miniQMT cancel failed: client_order_id=%s broker_order_id=%s result=%s "
+                    "reason=order_not_in_query_stock_orders "
+                    "query_returned_orders=%s lookup_key=%s "
+                    "(QMT may have dropped this id from today's list, wrong account/session, "
+                    "or query lag; confirm in QMT UI)",
+                    client_order_id or "-",
+                    broker_order_id,
+                    result,
+                    diag.get("query_returned_orders"),
+                    diag.get("lookup_key"),
+                )
+                return False
+
             log.warning(
                 "miniQMT cancel failed: client_order_id=%s broker_order_id=%s result=%s "
-                "query_status=%s msg=%s (check trading session, QMT client, or whether order still exists)",
+                "reason=order_still_active_in_query mapped_status=%s qmt_status=%s msg=%s "
+                "query_returned_orders=%s",
                 client_order_id or "-",
                 broker_order_id,
                 result,
-                (row or {}).get("status"),
-                (row or {}).get("status_msg"),
+                row.get("status"),
+                row.get("qmt_status"),
+                row.get("status_msg"),
+                diag.get("query_returned_orders"),
             )
             return False
         except Exception as e:
