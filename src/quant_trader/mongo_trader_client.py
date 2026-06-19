@@ -13,6 +13,15 @@ from pymongo.collection import Collection
 from .config import TraderConfig
 
 log = logging.getLogger("quantTrader")
+TERMINAL_SIGNAL_STATUSES = {
+    "filled",
+    "executed",
+    "cancelled",
+    "canceled",
+    "rejected",
+    "failed",
+    "partial_cancelled",
+}
 
 
 def _serialize_doc(doc: Any) -> Any:
@@ -103,6 +112,33 @@ class MongoTraderClient:
         except Exception as e:  # noqa: BLE001
             log.error("Failed to fetch submitted signals: %s", e)
             return []
+
+    def are_plan_sells_terminal(self, plan_id: str) -> bool:
+        """Return True when every live sell signal in a plan is terminal.
+
+        This powers Phase 2 sell-before-buy barriers. Empty sell sets are
+        intentionally treated as satisfied so pure-buy plans remain executable.
+        """
+
+        if not plan_id:
+            return True
+
+        query = {"user_id": self._user_id, "plan_id": str(plan_id), "mode": "live"}
+        projection = {"_id": 0, "order_id": 1, "execution_phase": 1, "action": 1, "status": 1}
+        for signal in self._signals.find(query, projection):
+            phase = str(signal.get("execution_phase") or signal.get("action") or "").lower()
+            if phase != "sell":
+                continue
+            status = str(signal.get("status") or "").lower()
+            if status not in TERMINAL_SIGNAL_STATUSES:
+                log.info(
+                    "Plan sell barrier waits: plan_id=%s order_id=%s status=%s",
+                    plan_id,
+                    signal.get("order_id"),
+                    status or "-",
+                )
+                return False
+        return True
 
     def update_signal_status(self, order_id: str, payload: Dict[str, Any]) -> None:
         signal = self._signals.find_one({"order_id": order_id, "user_id": self._user_id})

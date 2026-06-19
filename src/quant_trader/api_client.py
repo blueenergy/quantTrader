@@ -125,6 +125,15 @@ class TraderApiClient:
             log.error("Failed to fetch submitted signals: %s", e)
             return []
 
+    def are_plan_sells_terminal(self, plan_id: str) -> None:
+        """REST mode has no Phase 2 barrier endpoint yet.
+
+        Returning None marks the barrier as undecidable; TraderLoop will allow the
+        buy with a warning in hard mode so old/API-only deployments do not stall.
+        """
+
+        return None
+
     def update_signal_status(self, order_id: str, payload: Dict[str, Any]) -> None:
         """Update status of a trade signal.
 

@@ -13,7 +13,9 @@
     "cancel_retry_interval_seconds": 25,
     "use_activate_after": true,
     "trading_sessions": "",
-    "reject_signals_outside_session": false
+    "reject_signals_outside_session": false,
+    "sell_barrier_mode": "off",
+    "sell_barrier_timeout_seconds": 0
   },
   "_comment_api": "Optional: set backend_mode to api and fill api_base_url + api_token to use REST only.",
   "api_base_url": "",

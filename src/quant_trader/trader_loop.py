@@ -17,6 +17,7 @@ from .mongo_trader_client import MongoTraderClient
 log = logging.getLogger("quantTrader")
 CN_TZ = ZoneInfo("Asia/Shanghai")
 CN_A_SESSIONS = ((dt_time(9, 25), dt_time(11, 30)), (dt_time(13, 0), dt_time(15, 0)))
+PHASE_BARRIER_PLAN_SELLS_TERMINAL = "plan_sells_terminal"
 
 
 def _parse_hhmm(value: str) -> Optional[dt_time]:
@@ -353,6 +354,8 @@ class TraderLoop:
         if action == "sell":
             return self._passes_sell_position_gate(sig)
         if action == "buy":
+            if not self._passes_sell_barrier_gate(sig):
+                return False
             return self._passes_buy_cash_gate(sig, account)
         return True
 
@@ -415,6 +418,87 @@ class TraderLoop:
             self._mark_signal_retry(sig, f"waiting_for_cash available={available_cash:.2f} required={estimated_amount:.2f}")
             return False
         return True
+
+    def _passes_sell_barrier_gate(self, sig: Dict[str, Any]) -> bool:
+        mode = str(getattr(self.cfg, "sell_barrier_mode", "off") or "off").lower()
+        if mode == "off":
+            return True
+
+        order_id = sig.get("order_id")
+        barrier = self._phase_barrier_dict(sig.get("phase_barrier"))
+        if barrier.get("type") != PHASE_BARRIER_PLAN_SELLS_TERMINAL:
+            if mode == "hard":
+                log.warning(
+                    "Sell barrier undecidable; allowing buy without plan_sells_terminal barrier: order_id=%s",
+                    order_id,
+                )
+            return True
+
+        plan_id = str(barrier.get("plan_id") or sig.get("plan_id") or "").strip()
+        if not plan_id:
+            if mode == "hard":
+                log.warning("Sell barrier undecidable; allowing buy without plan_id: order_id=%s", order_id)
+            return True
+
+        try:
+            satisfied = self.api.are_plan_sells_terminal(plan_id)  # type: ignore[attr-defined]
+        except Exception as exc:  # noqa: BLE001
+            if mode == "hard":
+                log.warning(
+                    "Sell barrier query failed; allowing buy: order_id=%s plan_id=%s error=%s",
+                    order_id,
+                    plan_id,
+                    exc,
+                )
+            return True
+
+        if satisfied is None:
+            if mode == "hard":
+                log.warning(
+                    "Sell barrier undecidable; allowing buy: order_id=%s plan_id=%s mode=%s",
+                    order_id,
+                    plan_id,
+                    mode,
+                )
+            return True
+        if satisfied:
+            return True
+
+        timeout_seconds = max(float(getattr(self.cfg, "sell_barrier_timeout_seconds", 0.0) or 0.0), 0.0)
+        if timeout_seconds > 0:
+            anchor_ts = self._timestamp_or_none(sig.get("activate_after")) or self._timestamp_or_none(sig.get("created_at"))
+            if anchor_ts is not None and time.time() - anchor_ts >= timeout_seconds:
+                log.warning(
+                    "Sell barrier timeout reached; allowing buy: order_id=%s plan_id=%s timeout=%.1fs",
+                    order_id,
+                    plan_id,
+                    timeout_seconds,
+                )
+                return True
+
+        if mode == "soft":
+            # Shadow mode: observe how often the barrier WOULD block, but allow.
+            log.warning(
+                "Sell barrier would block buy (soft/shadow mode, allowing): order_id=%s plan_id=%s",
+                order_id,
+                plan_id,
+            )
+            return True
+
+        log.info("Buy signal waits for sell barrier: order_id=%s plan_id=%s", order_id, plan_id)
+        return False
+
+    @staticmethod
+    def _phase_barrier_dict(value: Any) -> Dict[str, Any]:
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, str) and value.strip():
+            try:
+                parsed = json.loads(value)
+                return parsed if isinstance(parsed, dict) else {}
+            except json.JSONDecodeError:
+                return {}
+        return {}
 
     @staticmethod
     def _position_for_symbol(positions: Dict[str, Dict[str, Any]], symbol: str) -> Optional[Dict[str, Any]]:

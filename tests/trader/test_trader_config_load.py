@@ -81,6 +81,8 @@ def test_load_config_execution_json_and_env_override(tmp_path, monkeypatch):
                     "cancel_retry_interval_seconds": 10,
                     "trading_sessions": "CN_A",
                     "use_activate_after": True,
+                    "sell_barrier_mode": "hard",
+                    "sell_barrier_timeout_seconds": 30,
                 },
             }
         ),
@@ -92,13 +94,19 @@ def test_load_config_execution_json_and_env_override(tmp_path, monkeypatch):
     assert cfg.cancel_retry_interval_seconds == 10
     assert cfg.trading_sessions == "CN_A"
     assert cfg.use_activate_after is True
+    assert cfg.sell_barrier_mode == "hard"
+    assert cfg.sell_barrier_timeout_seconds == 30
 
     monkeypatch.setenv("QUANT_TRADER_BUY_ORDER_TIMEOUT_SECONDS", "999")
     monkeypatch.setenv("QUANT_TRADER_TRADING_SESSIONS", "09:30-11:30")
+    monkeypatch.setenv("QUANT_TRADER_SELL_BARRIER_MODE", "soft")
+    monkeypatch.setenv("QUANT_TRADER_SELL_BARRIER_TIMEOUT_SECONDS", "60")
     cfg2 = load_config(str(p))
     assert cfg2.buy_order_timeout_seconds == 999
     assert cfg2.cancel_retry_grace_seconds == 5
     assert cfg2.trading_sessions == "09:30-11:30"
+    assert cfg2.sell_barrier_mode == "soft"
+    assert cfg2.sell_barrier_timeout_seconds == 60
 
 
 def test_load_config_miniqmt_defaults_to_cn_a_session(tmp_path, monkeypatch):
@@ -121,3 +129,5 @@ def test_load_config_miniqmt_defaults_to_cn_a_session(tmp_path, monkeypatch):
 
     assert cfg.trading_sessions == "CN_A"
     assert cfg.use_activate_after is True
+    assert cfg.sell_barrier_mode == "off"
+    assert cfg.sell_barrier_timeout_seconds == 0

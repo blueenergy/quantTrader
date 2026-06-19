@@ -105,6 +105,85 @@ def test_update_signal_status_not_found(mock_mongo):
 
 
 @patch("quant_trader.mongo_trader_client.MongoClient")
+def test_are_plan_sells_terminal_blocks_on_in_flight_sell(mock_mongo):
+    db = MagicMock()
+    mock_mongo.return_value.__getitem__.return_value = db
+    signals = MagicMock()
+    signals.find.return_value = FakeCursor(
+        [
+            {"order_id": "sell-1", "execution_phase": "sell", "status": "submitted"},
+            {"order_id": "buy-1", "execution_phase": "buy", "status": "pending"},
+        ]
+    )
+    db.__getitem__.side_effect = lambda name: {
+        "trade_signals": signals,
+        "trade_executions": MagicMock(),
+        "worker_status": MagicMock(),
+        "trader_positions": MagicMock(),
+        "trader_accounts": MagicMock(),
+        "position_snapshots": MagicMock(),
+        "securities_accounts": MagicMock(),
+    }[name]
+
+    client = MongoTraderClient(_base_cfg())
+
+    assert client.are_plan_sells_terminal("plan-1") is False
+    query = signals.find.call_args[0][0]
+    assert query == {"user_id": "user-1", "plan_id": "plan-1", "mode": "live"}
+
+
+@patch("quant_trader.mongo_trader_client.MongoClient")
+def test_are_plan_sells_terminal_allows_terminal_or_no_sells(mock_mongo):
+    db = MagicMock()
+    mock_mongo.return_value.__getitem__.return_value = db
+    signals = MagicMock()
+    db.__getitem__.side_effect = lambda name: {
+        "trade_signals": signals,
+        "trade_executions": MagicMock(),
+        "worker_status": MagicMock(),
+        "trader_positions": MagicMock(),
+        "trader_accounts": MagicMock(),
+        "position_snapshots": MagicMock(),
+        "securities_accounts": MagicMock(),
+    }[name]
+
+    client = MongoTraderClient(_base_cfg())
+
+    signals.find.return_value = FakeCursor(
+        [
+            {"order_id": "sell-1", "execution_phase": "sell", "status": "filled"},
+            {"order_id": "sell-2", "execution_phase": "sell", "status": "cancelled"},
+            {"order_id": "buy-1", "execution_phase": "buy", "status": "pending"},
+        ]
+    )
+    assert client.are_plan_sells_terminal("plan-1") is True
+
+    signals.find.return_value = FakeCursor([{"order_id": "buy-1", "execution_phase": "buy", "status": "pending"}])
+    assert client.are_plan_sells_terminal("plan-1") is True
+
+
+@patch("quant_trader.mongo_trader_client.MongoClient")
+def test_are_plan_sells_terminal_falls_back_to_action_for_legacy_sells(mock_mongo):
+    db = MagicMock()
+    mock_mongo.return_value.__getitem__.return_value = db
+    signals = MagicMock()
+    signals.find.return_value = FakeCursor([{"order_id": "legacy-sell", "action": "SELL", "status": "partial_filled"}])
+    db.__getitem__.side_effect = lambda name: {
+        "trade_signals": signals,
+        "trade_executions": MagicMock(),
+        "worker_status": MagicMock(),
+        "trader_positions": MagicMock(),
+        "trader_accounts": MagicMock(),
+        "position_snapshots": MagicMock(),
+        "securities_accounts": MagicMock(),
+    }[name]
+
+    client = MongoTraderClient(_base_cfg())
+
+    assert client.are_plan_sells_terminal("plan-1") is False
+
+
+@patch("quant_trader.mongo_trader_client.MongoClient")
 def test_create_execution_upserts_and_updates_signal(mock_mongo):
     db = MagicMock()
     mock_mongo.return_value.__getitem__.return_value = db

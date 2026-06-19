@@ -51,6 +51,8 @@ class TraderConfig:
     trading_sessions: str = ""
     reject_signals_outside_session: bool = False
     use_activate_after: bool = True
+    sell_barrier_mode: str = "off"
+    sell_barrier_timeout_seconds: float = 0.0
 
 
 def _execution_float(
@@ -263,6 +265,20 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         "QUANT_TRADER_USE_ACTIVATE_AFTER",
         True,
     )
+    sell_barrier_mode = _execution_string(
+        exec_data,
+        "sell_barrier_mode",
+        "QUANT_TRADER_SELL_BARRIER_MODE",
+        "off",
+    ).strip().lower()
+    if sell_barrier_mode not in {"off", "soft", "hard"}:
+        sell_barrier_mode = "off"
+    sell_barrier_timeout_seconds = _execution_float(
+        exec_data,
+        "sell_barrier_timeout_seconds",
+        "QUANT_TRADER_SELL_BARRIER_TIMEOUT_SECONDS",
+        0.0,
+    )
 
     return TraderConfig(
         backend_mode=backend_mode,
@@ -284,4 +300,6 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         trading_sessions=trading_sessions,
         reject_signals_outside_session=reject_signals_outside_session,
         use_activate_after=use_activate_after,
+        sell_barrier_mode=sell_barrier_mode,
+        sell_barrier_timeout_seconds=max(0.0, sell_barrier_timeout_seconds),
     )

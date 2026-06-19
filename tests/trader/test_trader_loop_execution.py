@@ -23,6 +23,8 @@ class MockApiClient:
         self.position_updates = []
         self.account_syncs = []
         self.heartbeats = []
+        self.sell_barrier_satisfied = True
+        self.sell_barrier_error = None
     
     def get_pending_signals(self, limit=50, include_submitted=False):
         # Return a test signal
@@ -37,6 +39,11 @@ class MockApiClient:
 
     def get_submitted_signals(self, limit=100):
         return []
+
+    def are_plan_sells_terminal(self, plan_id):
+        if self.sell_barrier_error:
+            raise self.sell_barrier_error
+        return self.sell_barrier_satisfied
     
     def update_signal_status(self, order_id, payload):
         self.signal_updates.append({
@@ -341,6 +348,226 @@ def test_trader_loop_cash_gates_buy_orders():
     assert broker.placed_orders == []
     assert api.signal_updates[0]["payload"]["status"] == "retry_pending"
     assert "waiting_for_cash" in api.signal_updates[0]["payload"]["last_error"]
+
+
+def test_trader_loop_sell_barrier_off_allows_buy():
+    cfg = TraderConfig(
+        backend_mode="api",
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0,
+        sell_barrier_mode="off",
+    )
+    api = MockApiClient()
+    api.sell_barrier_satisfied = False
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=True, enable_position_sync=False)
+
+    loop._handle_signal(
+        {
+            "order_id": "BUY_OFF",
+            "plan_id": "plan-1",
+            "symbol": "000001",
+            "action": "buy",
+            "size": 100,
+            "price": 10.0,
+            "phase_barrier": {"type": "plan_sells_terminal", "plan_id": "plan-1"},
+        },
+        account={"available_cash": 100000},
+    )
+
+    assert broker.placed_orders == ["BROKER_BUY_OFF"]
+    assert api.signal_updates[0]["payload"]["status"] == "submitted"
+
+
+def test_trader_loop_sell_barrier_hard_waits_for_in_flight_sell():
+    cfg = TraderConfig(
+        backend_mode="api",
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0,
+        sell_barrier_mode="hard",
+    )
+    api = MockApiClient()
+    api.sell_barrier_satisfied = False
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=True, enable_position_sync=False)
+
+    loop._handle_signal(
+        {
+            "order_id": "BUY_WAIT",
+            "plan_id": "plan-1",
+            "symbol": "000001",
+            "action": "buy",
+            "size": 100,
+            "price": 10.0,
+            "phase_barrier": {"type": "plan_sells_terminal", "plan_id": "plan-1"},
+        },
+        account={"available_cash": 100000},
+    )
+
+    assert broker.placed_orders == []
+    assert api.signal_updates == []
+
+
+def test_trader_loop_sell_barrier_hard_allows_when_sells_terminal():
+    cfg = TraderConfig(
+        backend_mode="api",
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0,
+        sell_barrier_mode="hard",
+    )
+    api = MockApiClient()
+    api.sell_barrier_satisfied = True
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=True, enable_position_sync=False)
+
+    loop._handle_signal(
+        {
+            "order_id": "BUY_CLEAR",
+            "plan_id": "plan-1",
+            "symbol": "000001",
+            "action": "buy",
+            "size": 100,
+            "price": 10.0,
+            "phase_barrier": {"type": "plan_sells_terminal", "plan_id": "plan-1"},
+        },
+        account={"available_cash": 100000},
+    )
+
+    assert broker.placed_orders == ["BROKER_BUY_CLEAR"]
+    assert api.signal_updates[0]["payload"]["status"] == "submitted"
+
+
+def test_trader_loop_sell_barrier_soft_shadow_allows_buy():
+    cfg = TraderConfig(
+        backend_mode="api",
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0,
+        sell_barrier_mode="soft",
+    )
+    api = MockApiClient()
+    api.sell_barrier_satisfied = False
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=True, enable_position_sync=False)
+
+    loop._handle_signal(
+        {
+            "order_id": "BUY_SOFT",
+            "plan_id": "plan-1",
+            "symbol": "000001",
+            "action": "buy",
+            "size": 100,
+            "price": 10.0,
+            "phase_barrier": {"type": "plan_sells_terminal", "plan_id": "plan-1"},
+        },
+        account={"available_cash": 100000},
+    )
+
+    assert broker.placed_orders == ["BROKER_BUY_SOFT"]
+    assert api.signal_updates[0]["payload"]["status"] == "submitted"
+
+
+def test_trader_loop_sell_barrier_query_error_allows_buy():
+    cfg = TraderConfig(
+        backend_mode="api",
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0,
+        sell_barrier_mode="hard",
+    )
+    api = MockApiClient()
+    api.sell_barrier_error = RuntimeError("mongo down")
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=True, enable_position_sync=False)
+
+    loop._handle_signal(
+        {
+            "order_id": "BUY_DBDOWN",
+            "plan_id": "plan-1",
+            "symbol": "000001",
+            "action": "buy",
+            "size": 100,
+            "price": 10.0,
+            "phase_barrier": {"type": "plan_sells_terminal", "plan_id": "plan-1"},
+        },
+        account={"available_cash": 100000},
+    )
+
+    assert broker.placed_orders == ["BROKER_BUY_DBDOWN"]
+    assert api.signal_updates[0]["payload"]["status"] == "submitted"
+
+
+def test_trader_loop_sell_barrier_undecidable_allows_buy():
+    cfg = TraderConfig(
+        backend_mode="api",
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0,
+        sell_barrier_mode="hard",
+    )
+    api = MockApiClient()
+    api.sell_barrier_satisfied = None
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=True, enable_position_sync=False)
+
+    loop._handle_signal(
+        {
+            "order_id": "BUY_UNKNOWN",
+            "plan_id": "plan-1",
+            "symbol": "000001",
+            "action": "buy",
+            "size": 100,
+            "price": 10.0,
+            "phase_barrier": {"type": "plan_sells_terminal", "plan_id": "plan-1"},
+        },
+        account={"available_cash": 100000},
+    )
+
+    assert broker.placed_orders == ["BROKER_BUY_UNKNOWN"]
+    assert api.signal_updates[0]["payload"]["status"] == "submitted"
+
+
+def test_trader_loop_sell_barrier_timeout_allows_buy(monkeypatch):
+    cfg = TraderConfig(
+        backend_mode="api",
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0,
+        sell_barrier_mode="hard",
+        sell_barrier_timeout_seconds=30,
+    )
+    api = MockApiClient()
+    api.sell_barrier_satisfied = False
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=True, enable_position_sync=False)
+    monkeypatch.setattr("quant_trader.trader_loop.time.time", lambda: 100.0)
+
+    loop._handle_signal(
+        {
+            "order_id": "BUY_TIMEOUT",
+            "plan_id": "plan-1",
+            "symbol": "000001",
+            "action": "buy",
+            "size": 100,
+            "price": 10.0,
+            "created_at": 10.0,
+            "phase_barrier": {"type": "plan_sells_terminal", "plan_id": "plan-1"},
+        },
+        account={"available_cash": 100000},
+    )
+
+    assert broker.placed_orders == ["BROKER_BUY_TIMEOUT"]
+    assert api.signal_updates[0]["payload"]["status"] == "submitted"
 
 
 def test_trader_loop_waits_for_activate_after(monkeypatch):
