@@ -4,6 +4,27 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
 
+class BrokerQueryError(RuntimeError):
+    """Raised when a broker snapshot query (orders/executions) is untrusted.
+
+    Core invariant for the whole reconcile pipeline:
+
+        Only a *successfully returned* order snapshot may be used to infer that
+        an order no longer exists at the broker. An empty snapshot is valid
+        information ("no live orders"); a failure is NOT.
+
+    Implementations that DO support snapshot queries must raise this error (not
+    return an empty dict) when the snapshot is unreliable, e.g. the broker is
+    disconnected, the session/account is wrong, the API raised, or it returned
+    ``None``. Collapsing those into ``{}`` would let callers mistake a disconnect
+    for "broker has no orders" and wrongly reconcile ``submitted`` -> ``cancelled``.
+
+    Consumers (e.g. ExecutionTracker.poll_execution_status) should catch this,
+    skip the current poll cycle, and leave order state unchanged until a trusted
+    snapshot is available again.
+    """
+
+
 class BrokerAdapter(ABC):
     """Abstract base class for broker integrations.
 
@@ -60,19 +81,24 @@ class BrokerAdapter(ABC):
     
     def get_execution_status(self) -> Dict[str, Dict[str, Any]]:
         """Get execution status for all tracked orders.
-        
-        Returns:
-            Dict of {broker_order_id: execution_status_data}
-            
+
+        Three-state contract (see :class:`BrokerQueryError`):
+            - success with orders -> non-empty dict {broker_order_id: data}
+            - success with no orders -> empty dict (a valid "no live orders" snapshot)
+            - untrusted snapshot (disconnect/session/API failure/None) -> raise
+              :class:`BrokerQueryError`
+
         Execution status data should include:
             - status: Current status ('submitted', 'partial', 'filled', 'rejected', etc.)
             - filled_size: Number of shares filled
             - avg_price: Average execution price
             - commission: Commission paid
             - timestamp: Last update timestamp
-            
-        Note: This is optional. Brokers that don't support status
-        queries should return an empty dict.
+
+        Note: This default is for brokers that do NOT support status queries; they
+        return an empty dict. Brokers that DO support queries must raise
+        :class:`BrokerQueryError` on failure instead of returning ``{}``, so an
+        unreliable snapshot is never mistaken for "broker has no orders".
         """
         return {}
 

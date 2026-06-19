@@ -8,7 +8,7 @@ import logging
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from quant_trader.broker_base import BrokerAdapter
+from quant_trader.broker_base import BrokerAdapter, BrokerQueryError
 
 log = logging.getLogger(__name__)
 
@@ -189,6 +189,11 @@ class MiniQMTBroker(BrokerAdapter):
             "query_returned_orders": None,
             "matched": False,
             "parse_error": None,
+            # query_failed distinguishes "trusted snapshot, id absent" (False) from
+            # "snapshot unavailable, cannot judge" (True). Callers must not treat a
+            # failed query as "order is gone".
+            "query_failed": False,
+            "query_error": None,
         }
         try:
             oid = int(str(broker_order_id).strip())
@@ -198,12 +203,17 @@ class MiniQMTBroker(BrokerAdapter):
 
         key = str(oid)
         diagnostic["lookup_key"] = key
-        orders = self.query_orders()
-        if not orders:
-            diagnostic["query_returned_orders"] = 0
+        try:
+            orders = self.query_orders()
+        except BrokerQueryError as exc:
+            # Untrusted snapshot: empty/absent here means "don't know", not "gone".
+            diagnostic["query_failed"] = True
+            diagnostic["query_error"] = str(exc)
             return None, diagnostic
 
         diagnostic["query_returned_orders"] = len(orders)
+        if not orders:
+            return None, diagnostic
         row = orders.get(key)
         diagnostic["matched"] = row is not None
         return row, diagnostic
@@ -275,6 +285,21 @@ class MiniQMTBroker(BrokerAdapter):
                     broker_order_id,
                     result,
                     diag.get("parse_error"),
+                )
+                return False
+
+            if diag.get("query_failed"):
+                # Cannot confirm the entrust disappeared because the re-query itself
+                # was untrusted (disconnect/session/API failure). Do NOT treat -1 as
+                # idempotent success; report not-accepted so the caller retries later.
+                log.warning(
+                    "miniQMT cancel could not be confirmed: client_order_id=%s "
+                    "broker_order_id=%s result=%s reason=query_unavailable error=%s "
+                    "(treating cancel as NOT accepted; will retry next cycle)",
+                    client_order_id or "-",
+                    broker_order_id,
+                    result,
+                    diag.get("query_error"),
                 )
                 return False
 
@@ -472,23 +497,41 @@ class MiniQMTBroker(BrokerAdapter):
             return {}
     
     def query_orders(self) -> Dict[str, Any]:
-        """Query all orders from miniQMT.
-        
-        Returns:
-            Dict of {order_id: order_data}
+        """Query all of today's orders from miniQMT.
+
+        Three-state contract (see :class:`BrokerQueryError`):
+            - success with orders -> non-empty dict {order_id: order_data}
+            - success with no orders -> empty dict (a valid snapshot: no live orders)
+            - not connected / API raised / API returned ``None`` -> raise
+              :class:`BrokerQueryError`
+
+        Never collapse a failure into ``{}``: callers treat an empty dict as
+        "broker has no live orders" and will reconcile ``submitted`` -> ``cancelled``.
+        Only a trusted snapshot may drive that decision.
         """
         if not self.xt_trader or not self.acc:
-            log.warning("miniQMT not connected, cannot query orders")
-            return {}
-            
+            raise BrokerQueryError(
+                "miniQMT not connected (xt_trader/acc missing); cannot query orders"
+            )
+
         try:
             from xtquant import xtconstant
-            
-            # Query stock orders
+
             orders = self.xt_trader.query_stock_orders(self.acc)
-            
-            result = {}
-            for order in orders:
+        except Exception as e:
+            # A transient/API failure is NOT an empty list; surface it as untrusted.
+            log.exception("Failed to query orders from miniQMT: %s", e)
+            raise BrokerQueryError(f"query_stock_orders failed: {e}") from e
+
+        if orders is None:
+            # xtquant can return None on disconnect/session error; ambiguous, not empty.
+            raise BrokerQueryError(
+                "query_stock_orders returned None (untrusted snapshot, not 'no orders')"
+            )
+
+        result: Dict[str, Any] = {}
+        for order in orders:
+            try:
                 # Map miniQMT status to our status
                 # 50: 已报, 51: 废单, 52: 部成, 53: 已成, 54: 部撤, 55: 已撤, 56: 待报
                 qmt_status = order.order_status
@@ -500,7 +543,7 @@ class MiniQMTBroker(BrokerAdapter):
                 order_partsucc_cancel = getattr(xtconstant, "ORDER_PARTSUCC_CANCEL", 54)
                 order_reported = getattr(xtconstant, "ORDER_REPORTED", 50)
                 order_wait_reporting = getattr(xtconstant, "ORDER_WAIT_REPORTING", 56)
-                
+
                 status = "unknown"
                 if qmt_status in [order_junk, order_canceled]: # 51, 55
                     status = "cancelled" # or rejected/failed based on msg
@@ -511,10 +554,10 @@ class MiniQMTBroker(BrokerAdapter):
                 elif qmt_status == order_part_succeeded: # 52
                     status = "partial_filled"
                 elif qmt_status == order_partsucc_cancel: # 54
-                    status = "partial_cancelled" 
+                    status = "partial_cancelled"
                 elif qmt_status in [order_reported, order_wait_reporting]: # 50, 56
                     status = "submitted"
-                
+
                 # Convert to standard format
                 order_data = {
                     "order_id": str(order.order_id),
@@ -543,18 +586,28 @@ class MiniQMTBroker(BrokerAdapter):
                                 order_data[target] = value
                                 break
                 result[str(order.order_id)] = order_data
-                
-            return result
-            
-        except Exception as e:
-            log.exception("Failed to query orders from miniQMT: %s", e)
-            return {}
+            except Exception as e:
+                # Skip a single malformed row rather than failing the whole snapshot;
+                # otherwise one bad record would masquerade as "fewer/no orders".
+                log.warning("Skipping unparseable miniQMT order row: %s", e)
+                continue
+
+        return result
 
     def get_execution_status(self) -> Dict[str, Dict[str, Any]]:
         """Get execution status for all tracked orders from miniQMT.
 
         This method queries all orders from miniQMT and returns a dictionary
         mapping broker_order_id to execution status data.
+
+        Three-state contract (see :class:`BrokerQueryError`):
+            - success with orders -> non-empty dict
+            - success with no orders -> empty dict (valid "no live orders" snapshot)
+            - untrusted snapshot -> raise :class:`BrokerQueryError`
+
+        :meth:`query_orders` raises :class:`BrokerQueryError` on untrusted
+        snapshots; we let it propagate so the tracker skips reconcile rather than
+        mass-cancelling on a disconnect.
 
         Returns:
             Dict of {broker_order_id: {
@@ -565,33 +618,29 @@ class MiniQMTBroker(BrokerAdapter):
             }}
         """
         if not self.xt_trader:
-            return {}
-            
-        try:
-            # Query latest orders state
-            orders = self.query_orders()
-            
-            result = {}
-            for broker_order_id, order_data in orders.items():
-                result[broker_order_id] = {
-                    "status": order_data["status"],
-                    "filled_size": order_data["filled_qty"],
-                    "avg_price": order_data["avg_price"],
-                    "msg": order_data.get("status_msg", ""),
-                    "raw_status": order_data.get("qmt_status")
-                }
-                for key in ("commission", "stamp_tax", "transfer_fee", "other_fee", "total_fee"):
-                    if key in order_data:
-                        result[broker_order_id][key] = order_data[key]
-            
-            if result:
-                log.debug("Got status for %d orders from miniQMT", len(result))
-                
-            return result
-            
-        except Exception as e:
-            log.error("Error getting execution status: %s", e)
-            return {}
+            raise BrokerQueryError(
+                "miniQMT not connected (xt_trader missing); cannot get execution status"
+            )
+
+        orders = self.query_orders()
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for broker_order_id, order_data in orders.items():
+            result[broker_order_id] = {
+                "status": order_data["status"],
+                "filled_size": order_data["filled_qty"],
+                "avg_price": order_data["avg_price"],
+                "msg": order_data.get("status_msg", ""),
+                "raw_status": order_data.get("qmt_status")
+            }
+            for key in ("commission", "stamp_tax", "transfer_fee", "other_fee", "total_fee"):
+                if key in order_data:
+                    result[broker_order_id][key] = order_data[key]
+
+        if result:
+            log.debug("Got status for %d orders from miniQMT", len(result))
+
+        return result
     
     def get_account_info(self) -> Dict[str, Any]:
         """Get account metadata information.

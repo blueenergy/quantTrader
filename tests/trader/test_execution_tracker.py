@@ -11,6 +11,7 @@ from unittest.mock import Mock, MagicMock
 import time
 
 from quant_trader.execution_tracker import ExecutionTracker, ExecutionStatus
+from quant_trader.broker_base import BrokerQueryError
 
 
 class FakeApiClient:
@@ -40,6 +41,8 @@ class FakeBroker:
             "account_id": "TEST_ACCOUNT_1",
             "broker": "test_broker"
         }
+        # When set, get_execution_status raises it to simulate an untrusted snapshot.
+        self.query_error = None
     
     def place_order(self, signal):
         order_id = f"BROKER_{signal.get('order_id', '1')}"
@@ -47,6 +50,8 @@ class FakeBroker:
         return order_id
     
     def get_execution_status(self):
+        if self.query_error is not None:
+            raise self.query_error
         return self.execution_responses
     
     def get_account_info(self):
@@ -509,6 +514,29 @@ def test_poll_reconciles_submitted_when_broker_query_empty():
     assert "ORDER_NO_RECON" not in tracker._pending_executions
     assert api.signal_updates[-1]["payload"]["status"] == "cancelled"
     assert api.signal_updates[-1]["payload"]["last_error"] == "submitted_entrust_absent_from_broker_query"
+
+
+def test_poll_skips_reconcile_when_broker_snapshot_untrusted():
+    """An untrusted snapshot (BrokerQueryError) must not cancel submitted orders."""
+    api = FakeApiClient()
+    broker = FakeBroker()
+    tracker = ExecutionTracker(api_client=api, broker=broker)
+    tracker.submit_order(
+        {
+            "order_id": "ORDER_KEEP",
+            "symbol": "000001",
+            "action": "buy",
+            "size": 100,
+            "price_ceiling": 10.5,
+        }
+    )
+    updates_before = len(api.signal_updates)
+    broker.query_error = BrokerQueryError("disconnected")
+    tracker.poll_execution_status()
+
+    assert "ORDER_KEEP" in tracker._pending_executions
+    assert tracker._pending_executions["ORDER_KEEP"].status == ExecutionStatus.SUBMITTED
+    assert len(api.signal_updates) == updates_before
 
 
 def test_cancel_requested_retries_broker_cancel_when_entrust_still_listed(monkeypatch):

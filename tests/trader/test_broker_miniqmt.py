@@ -5,6 +5,9 @@ from __future__ import annotations
 import sys
 import types
 
+import pytest
+
+from quant_trader.broker_base import BrokerQueryError
 from quant_trader.broker_miniQMT import MiniQMTBroker
 
 
@@ -187,6 +190,60 @@ def test_miniqmt_cancel_order_accepts_minus_one_when_query_shows_terminal(monkey
     ]
 
     assert broker.cancel_order("123456") is True
+    assert trader.cancel_calls
+
+
+def test_miniqmt_query_orders_returns_empty_dict_when_no_orders(monkeypatch):
+    """Successful empty snapshot is a trusted '{}', not a failure."""
+    broker, trader, _ = _broker(monkeypatch)
+    trader.orders = []
+
+    assert broker.query_orders() == {}
+
+
+def test_miniqmt_query_orders_raises_when_api_returns_none(monkeypatch):
+    """None from query_stock_orders is untrusted, not 'no orders'."""
+    broker, trader, _ = _broker(monkeypatch)
+    trader.query_stock_orders = lambda account: None
+
+    with pytest.raises(BrokerQueryError):
+        broker.query_orders()
+
+
+def test_miniqmt_query_orders_raises_on_api_exception(monkeypatch):
+    """An API exception is untrusted; must not collapse into an empty dict."""
+    broker, trader, _ = _broker(monkeypatch)
+
+    def boom(account):
+        raise RuntimeError("disconnected")
+
+    trader.query_stock_orders = boom
+
+    with pytest.raises(BrokerQueryError):
+        broker.query_orders()
+
+
+def test_miniqmt_get_execution_status_propagates_query_error(monkeypatch):
+    """get_execution_status must surface untrusted snapshots, not return {}."""
+    broker, trader, _ = _broker(monkeypatch)
+    trader.query_stock_orders = lambda account: None
+
+    with pytest.raises(BrokerQueryError):
+        broker.get_execution_status()
+
+
+def test_miniqmt_cancel_minus_one_not_accepted_when_query_unavailable(monkeypatch):
+    """Cancel -1 with an untrusted re-query must NOT be treated as idempotent success."""
+    broker, trader, _ = _broker(monkeypatch)
+
+    def cancel_fail(acc, oid):
+        trader.cancel_calls.append((acc, oid))
+        return -1
+
+    trader.cancel_order_stock = cancel_fail
+    trader.query_stock_orders = lambda account: None
+
+    assert broker.cancel_order("1082165310") is False
     assert trader.cancel_calls
 
 

@@ -13,7 +13,7 @@ from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from enum import Enum
 
 from .api_client import TraderApiClient
-from .broker_base import BrokerAdapter
+from .broker_base import BrokerAdapter, BrokerQueryError
 from .fee_model import TradeFeeModel
 from .mongo_trader_client import MongoTraderClient
 
@@ -280,13 +280,27 @@ class ExecutionTracker:
 
     def poll_execution_status(self) -> None:
         """Poll for execution status updates from broker."""
-        # For now, this is a simplified version
-        # In a real implementation, this would query the broker for status updates
-        # or use callbacks to receive real-time updates
-        
-        # Get current broker status (this would be implemented in the broker adapter)
+        # Fetch the broker snapshot first. The reconcile logic below treats an
+        # absent broker_order_id as "order gone -> cancelled", so we MUST only run
+        # it on a trusted snapshot. An untrusted snapshot (disconnect/session/API
+        # failure) raises BrokerQueryError; skip the whole cycle and leave order
+        # state unchanged until a trusted snapshot is available again.
         try:
             broker_executions = self.broker.get_execution_status()
+        except BrokerQueryError as e:
+            self.logger.warning(
+                "Skipping execution reconcile: broker snapshot unavailable "
+                "(untrusted, not 'no orders'): %s",
+                e,
+            )
+            return
+        except Exception as e:
+            self.logger.error(
+                "Skipping execution reconcile: failed to get broker snapshot: %s", e
+            )
+            return
+
+        try:
             now_ts = time.time()
 
             for broker_order_id, broker_status in broker_executions.items():
