@@ -48,6 +48,9 @@ class TraderConfig:
     buy_order_timeout_seconds: float = 3600.0
     cancel_retry_grace_seconds: float = 15.0
     cancel_retry_interval_seconds: float = 25.0
+    trading_sessions: str = ""
+    reject_signals_outside_session: bool = False
+    use_activate_after: bool = True
 
 
 def _execution_float(
@@ -69,6 +72,40 @@ def _execution_float(
         except (TypeError, ValueError):
             pass
     return default
+
+
+def _execution_bool(
+    exec_data: Dict[str, Any],
+    json_key: str,
+    env_name: str,
+    default: bool,
+) -> bool:
+    """Resolve boolean execution tuning: environment overrides JSON."""
+
+    raw = os.getenv(env_name)
+    if raw in (None, ""):
+        raw = exec_data.get(json_key) if json_key in exec_data else None
+    if raw in (None, ""):
+        return default
+    if isinstance(raw, bool):
+        return raw
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _execution_string(
+    exec_data: Dict[str, Any],
+    json_key: str,
+    env_name: str,
+    default: str = "",
+) -> str:
+    """Resolve string execution tuning: environment overrides JSON."""
+
+    raw = os.getenv(env_name)
+    if raw in (None, ""):
+        raw = exec_data.get(json_key) if json_key in exec_data else None
+    if raw in (None, ""):
+        return default
+    return str(raw)
 
 
 def load_config(config_path: str | None = None) -> TraderConfig:
@@ -208,6 +245,24 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         "QUANT_TRADER_CANCEL_RETRY_INTERVAL_SECONDS",
         25.0,
     )
+    trading_sessions = _execution_string(
+        exec_data,
+        "trading_sessions",
+        "QUANT_TRADER_TRADING_SESSIONS",
+        "CN_A" if str(broker).strip().lower() == "miniqmt" else "",
+    )
+    reject_signals_outside_session = _execution_bool(
+        exec_data,
+        "reject_signals_outside_session",
+        "QUANT_TRADER_REJECT_SIGNALS_OUTSIDE_SESSION",
+        False,
+    )
+    use_activate_after = _execution_bool(
+        exec_data,
+        "use_activate_after",
+        "QUANT_TRADER_USE_ACTIVATE_AFTER",
+        True,
+    )
 
     return TraderConfig(
         backend_mode=backend_mode,
@@ -226,4 +281,7 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         buy_order_timeout_seconds=buy_order_timeout_seconds,
         cancel_retry_grace_seconds=cancel_retry_grace_seconds,
         cancel_retry_interval_seconds=cancel_retry_interval_seconds,
+        trading_sessions=trading_sessions,
+        reject_signals_outside_session=reject_signals_outside_session,
+        use_activate_after=use_activate_after,
     )

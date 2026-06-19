@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
+from datetime import datetime, time as dt_time, timezone
 from typing import Any, Dict, List, Optional, Union
+from zoneinfo import ZoneInfo
 
 from .api_client import TraderApiClient
 from .broker_base import BrokerAdapter
@@ -12,6 +15,49 @@ from .fee_model import TradeFeeModel
 from .mongo_trader_client import MongoTraderClient
 
 log = logging.getLogger("quantTrader")
+CN_TZ = ZoneInfo("Asia/Shanghai")
+CN_A_SESSIONS = ((dt_time(9, 25), dt_time(11, 30)), (dt_time(13, 0), dt_time(15, 0)))
+
+
+def _parse_hhmm(value: str) -> Optional[dt_time]:
+    try:
+        hour, minute = str(value).strip().split(":", 1)
+        return dt_time(int(hour), int(minute))
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_session_windows(raw: Any) -> List[tuple[dt_time, dt_time]]:
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    if text.upper() in {"CN_A", "CN_A_CONTINUOUS"}:
+        return list(CN_A_SESSIONS)
+
+    items: List[Any]
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+            items = parsed if isinstance(parsed, list) else []
+        except json.JSONDecodeError:
+            items = []
+    else:
+        items = [part.strip() for part in text.split(",") if part.strip()]
+
+    windows: List[tuple[dt_time, dt_time]] = []
+    for item in items:
+        if isinstance(item, dict):
+            start_raw = item.get("start")
+            end_raw = item.get("end")
+        else:
+            if "-" not in str(item):
+                continue
+            start_raw, end_raw = str(item).split("-", 1)
+        start = _parse_hhmm(str(start_raw))
+        end = _parse_hhmm(str(end_raw))
+        if start and end and start < end:
+            windows.append((start, end))
+    return windows
 
 
 class TraderLoop:
@@ -41,6 +87,7 @@ class TraderLoop:
         self.broker = broker
         self.fee_model = TradeFeeModel.from_config(cfg.fee_model)
         self._stop = False
+        self._session_windows = _parse_session_windows(self.cfg.trading_sessions)
         
         # Execution tracker (replaces immediate 'filled' marking)
         self.execution_tracker: Optional[ExecutionTracker] = None
@@ -300,12 +347,42 @@ class TraderLoop:
                     log.exception("Failed to update signal status for %s", order_id)
 
     def _passes_execution_gates(self, sig: Dict[str, Any], account: Optional[Dict[str, Any]]) -> bool:
+        if not self._passes_schedule_gates(sig):
+            return False
         action = str(sig.get("action") or "").lower()
         if action == "sell":
             return self._passes_sell_position_gate(sig)
         if action == "buy":
             return self._passes_buy_cash_gate(sig, account)
         return True
+
+    def _passes_schedule_gates(self, sig: Dict[str, Any]) -> bool:
+        order_id = sig.get("order_id")
+        now_ts = time.time()
+
+        if self.cfg.use_activate_after:
+            activate_at = self._timestamp_or_none(sig.get("activate_after"))
+            if activate_at is not None and now_ts < activate_at:
+                log.info(
+                    "Signal waits for activate_after: order_id=%s activate_after=%s",
+                    order_id,
+                    sig.get("activate_after"),
+                )
+                return False
+
+        if not self._session_windows:
+            return True
+
+        local_now = datetime.fromtimestamp(now_ts, tz=timezone.utc).astimezone(CN_TZ)
+        in_session = local_now.weekday() < 5 and any(start <= local_now.time() <= end for start, end in self._session_windows)
+        if in_session:
+            return True
+
+        reason = "outside_trading_session"
+        log.info("Signal waits for trading session: order_id=%s local_time=%s", order_id, local_now.isoformat())
+        if self.cfg.reject_signals_outside_session:
+            self._mark_signal_retry(sig, reason)
+        return False
 
     def _passes_sell_position_gate(self, sig: Dict[str, Any]) -> bool:
         try:
@@ -357,6 +434,32 @@ class TraderLoop:
             return abs(size * price)
         except (TypeError, ValueError):
             return 0.0
+
+    @staticmethod
+    def _timestamp_or_none(value: Any) -> Optional[float]:
+        if value in (None, ""):
+            return None
+        if isinstance(value, (int, float)):
+            ts = float(value)
+            return ts / 1000.0 if ts > 1_000_000_000_000 else ts
+        if isinstance(value, datetime):
+            dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            pass
+        try:
+            normalized = text.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(normalized)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+        except ValueError:
+            return None
 
     def _mark_signal_retry(self, sig: Dict[str, Any], reason: str) -> None:
         order_id = sig.get("order_id")

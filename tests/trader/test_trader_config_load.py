@@ -79,6 +79,8 @@ def test_load_config_execution_json_and_env_override(tmp_path, monkeypatch):
                     "buy_order_timeout_seconds": 120,
                     "cancel_retry_grace_seconds": 5,
                     "cancel_retry_interval_seconds": 10,
+                    "trading_sessions": "CN_A",
+                    "use_activate_after": True,
                 },
             }
         ),
@@ -88,8 +90,34 @@ def test_load_config_execution_json_and_env_override(tmp_path, monkeypatch):
     assert cfg.buy_order_timeout_seconds == 120
     assert cfg.cancel_retry_grace_seconds == 5
     assert cfg.cancel_retry_interval_seconds == 10
+    assert cfg.trading_sessions == "CN_A"
+    assert cfg.use_activate_after is True
 
     monkeypatch.setenv("QUANT_TRADER_BUY_ORDER_TIMEOUT_SECONDS", "999")
+    monkeypatch.setenv("QUANT_TRADER_TRADING_SESSIONS", "09:30-11:30")
     cfg2 = load_config(str(p))
     assert cfg2.buy_order_timeout_seconds == 999
     assert cfg2.cancel_retry_grace_seconds == 5
+    assert cfg2.trading_sessions == "09:30-11:30"
+
+
+def test_load_config_miniqmt_defaults_to_cn_a_session(tmp_path, monkeypatch):
+    monkeypatch.delenv("QUANT_TRADER_TRADING_SESSIONS", raising=False)
+    monkeypatch.delenv("QUANT_TRADER_USE_ACTIVATE_AFTER", raising=False)
+    p = tmp_path / "cfg.json"
+    p.write_text(
+        json.dumps(
+            {
+                "backend_mode": "api",
+                "api_base_url": "http://localhost:8000/api",
+                "api_token": "token",
+                "broker": "miniQMT",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = load_config(str(p))
+
+    assert cfg.trading_sessions == "CN_A"
+    assert cfg.use_activate_after is True

@@ -7,6 +7,7 @@ These tests validate that:
 - Position sync still works with new execution tracking
 """
 
+from datetime import datetime, timezone
 from unittest.mock import Mock, patch, MagicMock
 from quant_trader.trader_loop import TraderLoop
 from quant_trader.config import TraderConfig
@@ -340,6 +341,86 @@ def test_trader_loop_cash_gates_buy_orders():
     assert broker.placed_orders == []
     assert api.signal_updates[0]["payload"]["status"] == "retry_pending"
     assert "waiting_for_cash" in api.signal_updates[0]["payload"]["last_error"]
+
+
+def test_trader_loop_waits_for_activate_after(monkeypatch):
+    cfg = TraderConfig(
+        backend_mode="api",
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0,
+        use_activate_after=True,
+    )
+    api = MockApiClient()
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=True, enable_position_sync=False)
+    now = datetime(2026, 6, 19, 1, 0, tzinfo=timezone.utc).timestamp()
+    activate_after = datetime(2026, 6, 19, 1, 30, tzinfo=timezone.utc).isoformat()
+    monkeypatch.setattr("quant_trader.trader_loop.time.time", lambda: now)
+
+    loop._handle_signal(
+        {
+            "order_id": "BUY_LATER",
+            "symbol": "000001",
+            "action": "buy",
+            "size": 100,
+            "price": 10.0,
+            "activate_after": activate_after,
+        },
+        account={"available_cash": 100000},
+    )
+
+    assert broker.placed_orders == []
+    assert api.signal_updates == []
+
+
+def test_trader_loop_waits_outside_configured_session(monkeypatch):
+    cfg = TraderConfig(
+        backend_mode="api",
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0,
+        trading_sessions="CN_A",
+    )
+    api = MockApiClient()
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=True, enable_position_sync=False)
+    saturday_cn_open = datetime(2026, 6, 20, 2, 0, tzinfo=timezone.utc).timestamp()
+    monkeypatch.setattr("quant_trader.trader_loop.time.time", lambda: saturday_cn_open)
+
+    loop._handle_signal(
+        {"order_id": "BUY_WEEKEND", "symbol": "000001", "action": "buy", "size": 100, "price": 10.0},
+        account={"available_cash": 100000},
+    )
+
+    assert broker.placed_orders == []
+    assert api.signal_updates == []
+
+
+def test_trader_loop_allows_cn_a_session_from_0925(monkeypatch):
+    cfg = TraderConfig(
+        backend_mode="api",
+        api_base_url="http://test:8000",
+        api_token="test_token",
+        securities_account_id="SEC123",
+        poll_interval=1.0,
+        trading_sessions="CN_A",
+    )
+    api = MockApiClient()
+    broker = MockBroker()
+    loop = TraderLoop(cfg=cfg, api=api, broker=broker, enable_execution_tracking=True, enable_position_sync=False)
+    cn_0925 = datetime(2026, 6, 19, 1, 25, tzinfo=timezone.utc).timestamp()
+    monkeypatch.setattr("quant_trader.trader_loop.time.time", lambda: cn_0925)
+
+    loop._handle_signal(
+        {"order_id": "BUY_OPEN", "symbol": "000001", "action": "buy", "size": 100, "price": 10.0},
+        account={"available_cash": 100000},
+    )
+
+    assert broker.placed_orders == ["BROKER_BUY_OPEN"]
+    assert api.signal_updates[0]["payload"]["status"] == "submitted"
 
 
 def test_trader_loop_resume_tracks_cancel_requested_order():
