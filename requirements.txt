@@ -1,1 +1,5 @@
 requests>=2.25.0
+
+# miniQMT (XtQuant) live broker; Windows + miniQMT client only.
+# On Linux/macOS this is skipped via the platform marker; tests use a fake module.
+xtquant; sys_platform == "win32"
