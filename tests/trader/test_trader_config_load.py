@@ -131,3 +131,20 @@ def test_load_config_miniqmt_defaults_to_cn_a_session(tmp_path, monkeypatch):
     assert cfg.use_activate_after is True
     assert cfg.sell_barrier_mode == "off"
     assert cfg.sell_barrier_timeout_seconds == 0
+
+
+def test_load_config_miniqmt_env_overrides(tmp_path, monkeypatch):
+    monkeypatch.setenv("TRADER_BACKEND_MODE", "db")
+    monkeypatch.setenv("MONGO_URI", "mongodb://localhost:27017")
+    monkeypatch.setenv("TRADER_USER_ID", "u1")
+    monkeypatch.setenv("TRADER_BROKER", "miniQMT")
+    monkeypatch.setenv("TRADER_MINIQMT_XT_PATH", "/tmp/fake-userdata-mini")
+    monkeypatch.setenv("TRADER_MINIQMT_ACCOUNT_ID", "SIM-ACC-0001")
+
+    cfg = load_config(None)
+
+    assert cfg.broker == "miniQMT"
+    assert cfg.miniQMT == {
+        "xt_path": "/tmp/fake-userdata-mini",
+        "account_id": "SIM-ACC-0001",
+    }

@@ -208,7 +208,13 @@ def load_config(config_path: str | None = None) -> TraderConfig:
         else os.getenv("TRADER_BROKER", "simulated")
     )
 
-    miniQMT = data.get("miniQMT") if isinstance(data.get("miniQMT"), dict) else {}
+    miniQMT = dict(data.get("miniQMT")) if isinstance(data.get("miniQMT"), dict) else {}
+    miniqmt_xt_path = os.getenv("TRADER_MINIQMT_XT_PATH")
+    miniqmt_account_id = os.getenv("TRADER_MINIQMT_ACCOUNT_ID")
+    if miniqmt_xt_path:
+        miniQMT["xt_path"] = miniqmt_xt_path
+    if miniqmt_account_id:
+        miniQMT["account_id"] = miniqmt_account_id
 
     securities_account_id = (
         data.get("securities_account_id")

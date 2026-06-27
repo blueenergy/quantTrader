@@ -57,6 +57,29 @@ jobs:
         run: |
           pytest -q tests/e2e -m e2e
 
+  docker-build:
+    name: Docker multi-arch build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image without pushing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          provenance: false
+
   system-e2e-mongo:
     name: System e2e with MongoDB
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'

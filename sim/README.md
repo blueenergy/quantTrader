@@ -50,6 +50,54 @@ python -m pytest -q tests/e2e -m e2e
 The real-Mongo fixture drops the configured e2e database at teardown. Use a
 dedicated database name; never point `E2E_MONGO_DB` at production data.
 
+## Docker Compose Runtime
+
+The same simulator can run as a long-lived quantTrader container in the
+development stack. From `quantFinance/`:
+
+```bash
+docker compose up -d --build quant-trader
+```
+
+The compose service builds `../quantTrader/Dockerfile` and starts:
+
+```bash
+python -m sim.run_simulated_quant_trader
+```
+
+The container sets `PYTHONPATH=/app:/app/sim/fake_xtquant`, so imports of
+`xtquant` are handled by the fake package while `MiniQMTBroker` remains the
+broker adapter under test.
+
+Default dev identity:
+
+- `TRADER_USER_ID`: `sim-e2e-user`
+- `TRADER_SECURITIES_ACCOUNT_ID`: `00000000000000000000e2e1`
+- `TRADER_MINIQMT_ACCOUNT_ID`: `SIM-ACC-0001`
+- `TRADER_MONGO_URI`: `mongodb://quant-mongodb:27017/`
+- `TRADER_MONGO_DB`: `${MONGO_DB}` from the `quantFinance` compose environment
+
+At startup, `sim.run_simulated_quant_trader` upserts this simulated
+`securities_accounts` document so account and position sync can write linked
+rows. Disable that behavior only if you seed the document yourself:
+
+```bash
+QUANT_TRADER_SEED_SIM_ACCOUNT=0 docker compose up -d --build quant-trader
+```
+
+This runtime is dev-only. It requires `QUANT_TRADER_ENV=dev`; the fake xtquant
+package refuses to import otherwise.
+
+## Docker Build CI
+
+GitHub Actions runs a `Docker multi-arch build` job on push/PR. It builds the
+quantTrader image for:
+
+- `linux/amd64`
+- `linux/arm64`
+
+The job validates the image build only. It does not push or deploy an image.
+
 ## Simulation Markers
 
 Simulation data is intentionally visible to humans:
