@@ -48,4 +48,9 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest -q tests
+          pytest -q tests -m "not e2e"
+
+      - name: Run e2e simulation tests
+        if: matrix.python-version == '3.12'
+        run: |
+          pytest -q tests/e2e -m e2e

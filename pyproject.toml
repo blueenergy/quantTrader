@@ -13,3 +13,8 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+markers = [
+    "e2e: end-to-end tests using fake external dependencies",
+]

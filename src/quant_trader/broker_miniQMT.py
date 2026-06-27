@@ -481,6 +481,8 @@ class MiniQMTBroker(BrokerAdapter):
                 "interest": float(getattr(asset, 'interest', 0)),            # 利息
                 "asset_balance": float(getattr(asset, 'asset_balance', 0)),  # 资产余额
             }
+            if getattr(asset, "simulated", False):
+                result["simulated"] = True
             
             log.info(
                 "✓ Account info: Total=¥%.2f, Cash=¥%.2f, Available=¥%.2f, Market Value=¥%.2f",
@@ -578,6 +580,8 @@ class MiniQMTBroker(BrokerAdapter):
                     "transfer_fee": ("transfer_fee", "transfer_cost"),
                     "other_fee": ("other_fee", "other_cost", "handling_fee"),
                     "total_fee": ("total_fee", "fee_total", "cost", "total_cost"),
+                    "simulated": ("simulated",),
+                    "sim_scenario": ("sim_scenario",),
                 }.items():
                     for name in candidates:
                         if hasattr(order, name):
@@ -633,7 +637,7 @@ class MiniQMTBroker(BrokerAdapter):
                 "msg": order_data.get("status_msg", ""),
                 "raw_status": order_data.get("qmt_status")
             }
-            for key in ("commission", "stamp_tax", "transfer_fee", "other_fee", "total_fee"):
+            for key in ("commission", "stamp_tax", "transfer_fee", "other_fee", "total_fee", "simulated", "sim_scenario"):
                 if key in order_data:
                     result[broker_order_id][key] = order_data[key]
 

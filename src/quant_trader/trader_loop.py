@@ -158,54 +158,7 @@ class TraderLoop:
         try:
             while not self._stop:
                 try:
-                    # Sync positions periodically
-                    account = None
-                    if self.position_manager:
-                        positions = self.position_manager.sync_positions()
-                        account = self.position_manager.sync_account()
-                        
-                        if positions and account:
-                            summary = self.position_manager.get_portfolio_summary()
-                            # account is a dict, not an object
-                            total_asset = account.get('total_asset', 0) if isinstance(account, dict) else account.total_asset
-                            available_cash = account.get('available_cash', 0) if isinstance(account, dict) else account.available_cash
-                            log.info(
-                                "Portfolio: %d positions | Total=¥%.2f | Cash=¥%.2f | P&L=¥%.2f (%.2f%%)",
-                                summary["total_positions"],
-                                total_asset,
-                                available_cash,
-                                summary["total_pnl"],
-                                summary["total_pnl_pct"]
-                            )
-                    
-                    # Poll for trading signals
-                    log.debug("Polling for signals...")
-                    signals = self.api.get_pending_signals(limit=50, include_submitted=False)
-                    
-                    if signals:
-                        log.info("Fetched %d pending signals", len(signals))
-                    else:
-                        log.debug("No pending signals found")
-                    
-                    sell_signals, buy_signals = self._split_ordered_signals(signals)
-                    for sig in sell_signals:
-                        self._handle_signal(sig, account=account)
-
-                    # Let sell fills update before gated buys are considered.
-                    if sell_signals and self.execution_tracker:
-                        self.execution_tracker.poll_execution_status()
-                    if sell_signals and self.position_manager:
-                        account = self.position_manager.sync_account(force=True)
-
-                    for sig in buy_signals:
-                        self._handle_signal(sig, account=account)
-
-                    # Poll execution status if enabled
-                    if self.execution_tracker:
-                        self.execution_tracker.poll_execution_status()
-
-                    self._record_heartbeat()
-
+                    self.run_iteration()
                 except Exception as e:  # noqa: BLE001
                     log.exception("Error in main loop: %s", e)
 
@@ -213,6 +166,60 @@ class TraderLoop:
         finally:
             self.broker.close()
             log.info("quantTrader stopped")
+
+    def run_iteration(self) -> None:
+        """Run one trader loop iteration.
+
+        This keeps ``run_forever`` behavior unchanged while giving tests a
+        deterministic way to drive one poll/reconcile cycle at a time.
+        """
+        # Sync positions periodically
+        account = None
+        if self.position_manager:
+            positions = self.position_manager.sync_positions()
+            account = self.position_manager.sync_account()
+
+            if positions and account:
+                summary = self.position_manager.get_portfolio_summary()
+                # account is a dict, not an object
+                total_asset = account.get('total_asset', 0) if isinstance(account, dict) else account.total_asset
+                available_cash = account.get('available_cash', 0) if isinstance(account, dict) else account.available_cash
+                log.info(
+                    "Portfolio: %d positions | Total=¥%.2f | Cash=¥%.2f | P&L=¥%.2f (%.2f%%)",
+                    summary["total_positions"],
+                    total_asset,
+                    available_cash,
+                    summary["total_pnl"],
+                    summary["total_pnl_pct"]
+                )
+
+        # Poll for trading signals
+        log.debug("Polling for signals...")
+        signals = self.api.get_pending_signals(limit=50, include_submitted=False)
+
+        if signals:
+            log.info("Fetched %d pending signals", len(signals))
+        else:
+            log.debug("No pending signals found")
+
+        sell_signals, buy_signals = self._split_ordered_signals(signals)
+        for sig in sell_signals:
+            self._handle_signal(sig, account=account)
+
+        # Let sell fills update before gated buys are considered.
+        if sell_signals and self.execution_tracker:
+            self.execution_tracker.poll_execution_status()
+        if sell_signals and self.position_manager:
+            account = self.position_manager.sync_account(force=True)
+
+        for sig in buy_signals:
+            self._handle_signal(sig, account=account)
+
+        # Poll execution status if enabled
+        if self.execution_tracker:
+            self.execution_tracker.poll_execution_status()
+
+        self._record_heartbeat()
 
     # ------------------------------------------------------------------
     # Internal helpers
