@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib
+import os
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict
@@ -10,6 +12,7 @@ from typing import Any, Dict
 import mongomock
 import pytest
 from bson import ObjectId
+from pymongo import MongoClient as RealMongoClient
 
 # CI installs the package from ``src``; keep top-level dev-only ``sim`` importable.
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -58,9 +61,21 @@ def sim_engine():
 
 @pytest.fixture
 def e2e_context(monkeypatch, install_fake_xtquant, sim_engine):
-    client = mongomock.MongoClient()
-    monkeypatch.setattr("quant_trader.mongo_trader_client.MongoClient", lambda *_args, **_kwargs: client)
-    db_name = "finance_e2e"
+    db_backend = os.getenv("E2E_DB_BACKEND", "mock").strip().lower()
+    db_name = os.getenv("E2E_MONGO_DB") or f"finance_e2e_{uuid.uuid4().hex}"
+    drop_database_on_teardown = False
+
+    if db_backend == "real":
+        mongo_uri = os.getenv("E2E_MONGO_URI", "mongodb://127.0.0.1:27017")
+        client = RealMongoClient(mongo_uri)
+        drop_database_on_teardown = True
+    elif db_backend in {"mock", "mongomock"}:
+        mongo_uri = "mongodb://mongomock"
+        client = mongomock.MongoClient()
+        monkeypatch.setattr("quant_trader.mongo_trader_client.MongoClient", lambda *_args, **_kwargs: client)
+    else:
+        raise RuntimeError(f"Unsupported E2E_DB_BACKEND={db_backend!r}; expected 'mock' or 'real'")
+
     db = client[db_name]
     securities_account_id = str(ObjectId())
     db.securities_accounts.insert_one(
@@ -75,7 +90,7 @@ def e2e_context(monkeypatch, install_fake_xtquant, sim_engine):
 
     cfg = TraderConfig(
         backend_mode="db",
-        mongo_uri="mongodb://mongomock",
+        mongo_uri=mongo_uri,
         mongo_db=db_name,
         user_id=SIM_USER_ID,
         securities_account_id=securities_account_id,
@@ -105,6 +120,9 @@ def e2e_context(monkeypatch, install_fake_xtquant, sim_engine):
     finally:
         broker.close()
         api.close()
+        if drop_database_on_teardown:
+            client.drop_database(db_name)
+            client.close()
 
 
 @pytest.fixture

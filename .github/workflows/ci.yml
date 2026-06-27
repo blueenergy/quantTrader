@@ -6,6 +6,8 @@ on:
   pull_request:
     branches: [main, master, develop]
   workflow_dispatch: {}
+  schedule:
+    - cron: '0 20 * * *'
 
 permissions:
   contents: read
@@ -52,5 +54,45 @@ jobs:
 
       - name: Run e2e simulation tests
         if: matrix.python-version == '3.12'
+        run: |
+          pytest -q tests/e2e -m e2e
+
+  system-e2e-mongo:
+    name: System e2e with MongoDB
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+          pip install -e .
+
+      - name: Run system e2e tests with real MongoDB
+        env:
+          E2E_DB_BACKEND: real
+          E2E_MONGO_URI: mongodb://127.0.0.1:27017
+          E2E_MONGO_DB: finance_e2e_${{ github.run_id }}
         run: |
           pytest -q tests/e2e -m e2e
