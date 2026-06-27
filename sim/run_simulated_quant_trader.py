@@ -3,10 +3,13 @@ from __future__ import annotations
 import os
 import sys
 import time
+import logging
 
 from bson import ObjectId
 from pymongo import MongoClient
 
+
+log = logging.getLogger(__name__)
 
 DEFAULT_SECURITIES_ACCOUNT_ID = "00000000000000000000e2e1"
 DEFAULT_USER_ID = "sim-e2e-user"
@@ -39,16 +42,53 @@ def _seed_simulated_account() -> None:
             {"_id": ObjectId(securities_account_id), "user_id": user_id},
             {
                 "$set": {
-                    "user_id": user_id,
-                    "broker": os.getenv("QUANT_TRADER_SIM_BROKER_NAME", DEFAULT_BROKER),
-                    "account_id": account_id,
                     "is_simulated": True,
                     "updated_at": time.time(),
                 },
-                "$setOnInsert": {"created_at": time.time()},
+                "$setOnInsert": {
+                    "user_id": user_id,
+                    "broker": os.getenv("QUANT_TRADER_SIM_BROKER_NAME", DEFAULT_BROKER),
+                    "account_id": account_id,
+                    "created_at": time.time(),
+                },
             },
             upsert=True,
         )
+    finally:
+        client.close()
+
+
+def _restore_sim_engine_from_mongo() -> None:
+    if os.getenv("QUANT_TRADER_SIM_RESTORE_STATE", "1").strip().lower() not in {"1", "true", "yes", "on"}:
+        return
+
+    mongo_uri = _env_default("TRADER_MONGO_URI", "mongodb://quant-mongodb:27017/")
+    mongo_db = _env_default("TRADER_MONGO_DB", os.getenv("MONGO_DB", "finance"))
+    user_id = _env_default("TRADER_USER_ID", DEFAULT_USER_ID)
+    account_id = _env_default("TRADER_MINIQMT_ACCOUNT_ID", DEFAULT_ACCOUNT_ID)
+    securities_account_id = _env_default("TRADER_SECURITIES_ACCOUNT_ID", DEFAULT_SECURITIES_ACCOUNT_ID)
+
+    client = MongoClient(mongo_uri)
+    try:
+        from sim.matching_engine import default_engine
+        from sim.state_restore import restore_engine_from_mongo
+
+        summary = restore_engine_from_mongo(
+            default_engine,
+            client[mongo_db],
+            user_id=user_id,
+            securities_account_id=securities_account_id,
+            account_id=account_id,
+        )
+        log.info(
+            "Restored simulated miniQMT state: positions=%s cash=%.2f next_order_id=%s account_id=%s",
+            summary["restored_positions"],
+            summary["cash"],
+            summary["next_order_id"],
+            summary["account_id"],
+        )
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Failed to restore simulated miniQMT state from Mongo: %s", exc)
     finally:
         client.close()
 
@@ -61,11 +101,13 @@ def main() -> None:
     _env_default("TRADER_POLL_INTERVAL", "1.0")
     _env_default("TRADER_LOG_LEVEL", "INFO")
     _env_default("QUANT_TRADER_SIM_AUTO_TICK", "1")
+    _env_default("QUANT_TRADER_SIM_RESTORE_STATE", "1")
 
     if os.getenv("QUANT_TRADER_ENV") != "dev":
         raise RuntimeError("simulated quantTrader container requires QUANT_TRADER_ENV=dev")
 
     _seed_simulated_account()
+    _restore_sim_engine_from_mongo()
 
     from quant_trader.cli import main as cli_main
 

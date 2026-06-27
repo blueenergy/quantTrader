@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 
 STOCK_BUY = 23
@@ -17,6 +17,13 @@ ORDER_SUCCEEDED = 53
 ORDER_PARTSUCC_CANCEL = 54
 ORDER_CANCELED = 55
 ORDER_WAIT_REPORTING = 56
+
+
+def _first_present(*values: Any, default: Any = None) -> Any:
+    for value in values:
+        if value is not None:
+            return value
+    return default
 
 
 @dataclass
@@ -76,6 +83,62 @@ class SimMatchingEngine:
         self.next_order_scenario: Optional[str] = None
         self.next_cancel_mode: Optional[str] = None
         self.next_query_orders_fault: Optional[str] = None
+
+    def restore_state(
+        self,
+        *,
+        cash: Optional[float] = None,
+        positions: Iterable[Dict[str, Any]] = (),
+        next_order_id: Optional[int] = None,
+        account_id: Optional[str] = None,
+    ) -> None:
+        """Restore an absolute account snapshot into the in-memory engine.
+
+        This is intentionally idempotent: callers can run it again with the
+        same snapshot without doubling cash, positions, or order ids.
+        """
+
+        self.reset()
+        if account_id:
+            self.account_id = str(account_id)
+        if cash is not None:
+            self.cash = float(cash)
+        if next_order_id is not None:
+            self.next_order_id = max(int(next_order_id), 1_000_001)
+
+        for row in positions:
+            symbol = row.get("symbol") or row.get("stock_code")
+            if not symbol:
+                continue
+            volume = int(_first_present(row.get("volume"), row.get("qty"), row.get("quantity"), row.get("shares"), default=0))
+            if volume <= 0:
+                continue
+            available = int(
+                _first_present(
+                    row.get("can_use_volume"),
+                    row.get("available_qty"),
+                    row.get("available_shares"),
+                    row.get("available_volume"),
+                    default=volume,
+                )
+            )
+            price = float(
+                _first_present(
+                    row.get("avg_price"),
+                    row.get("cost_price"),
+                    row.get("open_price"),
+                    row.get("last_price"),
+                    default=10.0,
+                )
+            )
+            self.positions[str(symbol)] = SimPosition(
+                stock_code=str(symbol),
+                volume=volume,
+                can_use_volume=max(0, available),
+                frozen_volume=int(_first_present(row.get("frozen_volume"), row.get("frozen_qty"), default=0)),
+                open_price=price,
+                last_price=float(_first_present(row.get("last_price"), row.get("current_price"), default=price)),
+            )
 
     def set_next_order_scenario(self, scenario: str) -> None:
         self.next_order_scenario = scenario
