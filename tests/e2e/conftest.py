@@ -4,11 +4,17 @@ import importlib
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict
 
 import mongomock
 import pytest
 from bson import ObjectId
+
+# CI installs the package from ``src``; keep top-level dev-only ``sim`` importable.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from quant_trader.config import TraderConfig
 from quant_trader.mongo_trader_client import MongoTraderClient
