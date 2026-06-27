@@ -56,6 +56,10 @@ The same simulator can run as a long-lived quantTrader container in the
 development stack. From `quantFinance/`:
 
 ```bash
+cp ../quantTrader/.env.example ../quantTrader/.env
+```
+
+```bash
 docker compose up -d --build quant-trader
 ```
 
@@ -69,13 +73,28 @@ The container sets `PYTHONPATH=/app:/app/sim/fake_xtquant`, so imports of
 `xtquant` are handled by the fake package while `MiniQMTBroker` remains the
 broker adapter under test.
 
-Default dev identity:
+Environment ownership is split intentionally:
+
+- `quantFinance/.env`: shared stack settings such as `DOCKER_MONGO_URI` and
+  `MONGO_DB`.
+- `quantTrader/.env`: quantTrader-specific runtime settings such as broker
+  mode, simulated account identity, poll interval, and fake miniQMT config.
+
+The compose service injects `../quantTrader/.env` via `env_file` and overrides
+only the shared Mongo connection:
+
+- `TRADER_MONGO_URI`: `${DOCKER_MONGO_URI:-mongodb://quant-mongodb:27017/}`
+- `TRADER_MONGO_DB`: `${MONGO_DB}`
+
+The env file is optional in compose so the service can still start with the
+entrypoint defaults. Copying `.env.example` is recommended whenever you want to
+pin a real development user/account or document local overrides.
+
+Default dev identity from `quantTrader/.env.example`:
 
 - `TRADER_USER_ID`: `sim-e2e-user`
 - `TRADER_SECURITIES_ACCOUNT_ID`: `00000000000000000000e2e1`
 - `TRADER_MINIQMT_ACCOUNT_ID`: `SIM-ACC-0001`
-- `TRADER_MONGO_URI`: `mongodb://quant-mongodb:27017/`
-- `TRADER_MONGO_DB`: `${MONGO_DB}` from the `quantFinance` compose environment
 
 At startup, `sim.run_simulated_quant_trader` upserts this simulated
 `securities_accounts` document so account and position sync can write linked
