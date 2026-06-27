@@ -124,3 +124,79 @@ def test_miniqmt_simulated_disconnect_does_not_reconcile_to_cancelled(e2e_contex
     filled_signal = e2e_context.db.trade_signals.find_one({"order_id": signal["order_id"], "user_id": SIM_USER_ID})
     assert filled_signal["status"] == "filled"
     assert filled_signal["filled_qty"] == 100
+
+
+@pytest.mark.e2e
+def test_miniqmt_simulated_sell_reduces_position_and_adds_cash(e2e_context, seed_signal):
+    e2e_context.engine.seed_position("000005.SZ", volume=200, price=10.0)
+    signal = seed_signal(order_id="SIM-SELL-HAPPY", symbol="000005.SZ", action="sell", size=100, price=10.0)
+
+    e2e_context.loop.run_iteration()
+    e2e_context.engine.tick()
+    e2e_context.loop.run_iteration()
+
+    filled_signal = e2e_context.db.trade_signals.find_one({"order_id": signal["order_id"], "user_id": SIM_USER_ID})
+    assert filled_signal["status"] == "filled"
+    assert filled_signal["filled_qty"] == 100
+    assert filled_signal["avg_price"] == 9.9
+
+    position = e2e_context.db.trader_positions.find_one(
+        {"user_id": SIM_USER_ID, "symbol": "000005.SZ", "account_id": SIM_ACCOUNT_ID}
+    )
+    assert position is not None
+    assert position["qty"] == 100
+    assert position["can_use_volume"] == 100
+
+    account = e2e_context.db.trader_accounts.find_one(
+        {"user_id": SIM_USER_ID, "account_id": SIM_ACCOUNT_ID}
+    )
+    assert account is not None
+    assert account["cash"] == 1000990.0
+
+
+@pytest.mark.e2e
+def test_miniqmt_simulated_rejects_sell_when_position_insufficient(e2e_context, seed_signal):
+    e2e_context.engine.seed_position("000006.SZ", volume=50, price=10.0)
+    signal = seed_signal(order_id="SIM-SELL-INSUFFICIENT", symbol="000006.SZ", action="sell", size=100, price=10.0)
+
+    e2e_context.loop.run_iteration()
+
+    rejected_signal = e2e_context.db.trade_signals.find_one({"order_id": signal["order_id"], "user_id": SIM_USER_ID})
+    assert rejected_signal["status"] == "rejected"
+    assert "insufficient_available_position" in rejected_signal["last_error"]
+    assert e2e_context.db.trade_executions.count_documents({"order_id": signal["order_id"], "user_id": SIM_USER_ID}) == 0
+    assert e2e_context.engine.orders == {}
+
+
+@pytest.mark.e2e
+def test_miniqmt_simulated_buy_timeout_cancel_minus_one_missing_order(e2e_context, seed_signal):
+    e2e_context.engine.set_next_order_scenario("remain_submitted")
+    e2e_context.engine.set_next_cancel_mode("minus_one_remove_order")
+    if e2e_context.loop.execution_tracker:
+        e2e_context.loop.execution_tracker.buy_order_timeout_seconds = 0.0
+    signal = seed_signal(
+        order_id="SIM-BUY-TIMEOUT-CANCEL",
+        symbol="000007.SZ",
+        action="buy",
+        size=100,
+        price=10.0,
+    )
+
+    e2e_context.loop.run_iteration()
+
+    cancel_requested = e2e_context.db.trade_signals.find_one({"order_id": signal["order_id"], "user_id": SIM_USER_ID})
+    assert cancel_requested["status"] == "cancel_requested"
+    assert cancel_requested["filled_qty"] == 0
+    assert cancel_requested["remaining_size"] == 100
+
+    e2e_context.loop.run_iteration()
+
+    cancelled = e2e_context.db.trade_signals.find_one({"order_id": signal["order_id"], "user_id": SIM_USER_ID})
+    assert cancelled["status"] == "cancelled"
+    assert cancelled["last_error"] == "order_absent_from_broker_query_after_cancel"
+
+    execution = e2e_context.db.trade_executions.find_one(
+        {"order_id": signal["order_id"], "status": "cancelled", "user_id": SIM_USER_ID}
+    )
+    assert execution is not None
+    assert execution["filled_size"] == 0

@@ -74,10 +74,16 @@ class SimMatchingEngine:
         self.next_order_id = 1_000_001
         self.default_scenario = "fill_all_next_tick"
         self.next_order_scenario: Optional[str] = None
+        self.next_cancel_mode: Optional[str] = None
         self.next_query_orders_fault: Optional[str] = None
 
     def set_next_order_scenario(self, scenario: str) -> None:
         self.next_order_scenario = scenario
+
+    def set_next_cancel_mode(self, mode: str) -> None:
+        if mode not in {"minus_one_remove_order"}:
+            raise ValueError(f"Unsupported cancel mode: {mode}")
+        self.next_cancel_mode = mode
 
     def fail_next_query_orders(self, mode: str = "exception") -> None:
         if mode not in {"exception", "none"}:
@@ -125,6 +131,10 @@ class SimMatchingEngine:
         order = self.orders.get(int(order_id))
         if not order:
             return -1
+        if self.next_cancel_mode == "minus_one_remove_order":
+            self.next_cancel_mode = None
+            self.orders.pop(int(order_id), None)
+            return -1
         if order.order_status in {ORDER_SUCCEEDED, ORDER_CANCELED, ORDER_JUNK, ORDER_PARTSUCC_CANCEL}:
             return -1
         if order.traded_volume > 0:
@@ -140,6 +150,8 @@ class SimMatchingEngine:
             if order.order_status in {ORDER_JUNK, ORDER_SUCCEEDED, ORDER_CANCELED, ORDER_PARTSUCC_CANCEL}:
                 continue
             order.ticks_seen += 1
+            if order.scenario == "remain_submitted":
+                continue
             if order.scenario == "partial_then_fill" and order.ticks_seen == 1:
                 partial_qty = max(1, order.order_volume // 2)
                 self._apply_fill(order, partial_qty)
