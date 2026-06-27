@@ -102,9 +102,9 @@ def _execution_string(
 ) -> str:
     """Resolve string execution tuning: environment overrides JSON."""
 
-    raw = os.getenv(env_name)
-    if raw in (None, ""):
-        raw = exec_data.get(json_key) if json_key in exec_data else None
+    if env_name in os.environ:
+        return str(os.environ[env_name])
+    raw = exec_data.get(json_key) if json_key in exec_data else None
     if raw in (None, ""):
         return default
     return str(raw)

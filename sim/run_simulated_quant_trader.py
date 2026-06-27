@@ -60,6 +60,7 @@ def main() -> None:
     _env_default("TRADER_MINIQMT_XT_PATH", "/tmp/fake-userdata-mini")
     _env_default("TRADER_POLL_INTERVAL", "1.0")
     _env_default("TRADER_LOG_LEVEL", "INFO")
+    _env_default("QUANT_TRADER_SIM_AUTO_TICK", "1")
 
     if os.getenv("QUANT_TRADER_ENV") != "dev":
         raise RuntimeError("simulated quantTrader container requires QUANT_TRADER_ENV=dev")

@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import os
+
 from sim.matching_engine import default_engine
+
+
+def _auto_tick_enabled() -> bool:
+    return os.getenv("QUANT_TRADER_SIM_AUTO_TICK", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class XtQuantTrader:
@@ -44,6 +50,8 @@ class XtQuantTrader:
         )
 
     def query_stock_orders(self, account):
+        if _auto_tick_enabled():
+            self.engine.tick()
         return self.engine.query_orders()
 
     def query_stock_positions(self, account):

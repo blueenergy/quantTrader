@@ -136,6 +136,11 @@ for debugging and for making simulated rows easy to identify in MongoDB.
 `SimMatchingEngine` is deterministic. Tests drive it explicitly with `tick()`;
 there are no background threads, random prices, or real-time sleeps.
 
+Docker runtime enables `QUANT_TRADER_SIM_AUTO_TICK=1` by default. In that mode,
+the fake miniQMT package advances the matching engine whenever quantTrader
+queries order status, so long-lived simulation orders can move from
+`submitted` to `filled` without test code calling `tick()`.
+
 Order scenarios:
 
 - `fill_all_next_tick`: default; fills the full order on the next `tick()`.

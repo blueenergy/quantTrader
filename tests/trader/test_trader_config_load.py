@@ -133,6 +133,26 @@ def test_load_config_miniqmt_defaults_to_cn_a_session(tmp_path, monkeypatch):
     assert cfg.sell_barrier_timeout_seconds == 0
 
 
+def test_load_config_empty_trading_sessions_env_disables_session_gate(tmp_path, monkeypatch):
+    monkeypatch.setenv("QUANT_TRADER_TRADING_SESSIONS", "")
+    p = tmp_path / "cfg.json"
+    p.write_text(
+        json.dumps(
+            {
+                "backend_mode": "api",
+                "api_base_url": "http://localhost:8000/api",
+                "api_token": "token",
+                "broker": "miniQMT",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cfg = load_config(str(p))
+
+    assert cfg.trading_sessions == ""
+
+
 def test_load_config_miniqmt_env_overrides(tmp_path, monkeypatch):
     monkeypatch.setenv("TRADER_BACKEND_MODE", "db")
     monkeypatch.setenv("MONGO_URI", "mongodb://localhost:27017")

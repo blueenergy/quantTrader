@@ -49,6 +49,18 @@ def test_miniqmt_simulated_buy_happy_path(e2e_context, seed_signal):
 
 
 @pytest.mark.e2e
+def test_miniqmt_simulated_auto_tick_fills_runtime_order(e2e_context, seed_signal, monkeypatch):
+    monkeypatch.setenv("QUANT_TRADER_SIM_AUTO_TICK", "1")
+    signal = seed_signal(order_id="SIM-BUY-AUTO-TICK", symbol="000011.SZ", action="buy", size=100, price=10.0)
+
+    e2e_context.loop.run_iteration()
+
+    filled_signal = e2e_context.db.trade_signals.find_one({"order_id": signal["order_id"], "user_id": SIM_USER_ID})
+    assert filled_signal["status"] == "filled"
+    assert filled_signal["filled_qty"] == 100
+
+
+@pytest.mark.e2e
 def test_miniqmt_simulated_partial_then_fill(e2e_context, seed_signal):
     e2e_context.engine.set_next_order_scenario("partial_then_fill")
     signal = seed_signal(order_id="SIM-BUY-PARTIAL", symbol="000002.SZ", action="buy", size=100, price=20.0)
