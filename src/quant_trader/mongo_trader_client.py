@@ -83,6 +83,11 @@ class MongoTraderClient:
         except Exception:  # noqa: BLE001
             pass
 
+    def _account_scoped_query(self, query: Dict[str, Any]) -> Dict[str, Any]:
+        if self.securities_account_id:
+            query["securities_account_id"] = self.securities_account_id
+        return query
+
     # ------------------------------------------------------------------
     # Signals & executions
     # ------------------------------------------------------------------
@@ -92,6 +97,7 @@ class MongoTraderClient:
             "is_executable": True,
             "mode": "live",
         }
+        self._account_scoped_query(query)
         if include_submitted:
             query["status"] = {"$in": ["pending", "retry_pending", "submitted", "partial_filled", "cancel_requested"]}
         else:
@@ -123,7 +129,7 @@ class MongoTraderClient:
         if not plan_id:
             return True
 
-        query = {"user_id": self._user_id, "plan_id": str(plan_id), "mode": "live"}
+        query = self._account_scoped_query({"user_id": self._user_id, "plan_id": str(plan_id), "mode": "live"})
         projection = {"_id": 0, "order_id": 1, "execution_phase": 1, "action": 1, "status": 1}
         for signal in self._signals.find(query, projection):
             phase = str(signal.get("execution_phase") or signal.get("action") or "").lower()
@@ -141,12 +147,13 @@ class MongoTraderClient:
         return True
 
     def update_signal_status(self, order_id: str, payload: Dict[str, Any]) -> None:
-        signal = self._signals.find_one({"order_id": order_id, "user_id": self._user_id})
+        query = self._account_scoped_query({"order_id": order_id, "user_id": self._user_id})
+        signal = self._signals.find_one(query)
         if not signal:
             raise RuntimeError(f"Signal not found: {order_id}")
 
         result = self._signals.update_one(
-            {"order_id": order_id, "user_id": self._user_id},
+            query,
             {"$set": payload},
         )
         if result.matched_count == 0:
@@ -163,7 +170,7 @@ class MongoTraderClient:
         order_id = execution.get("order_id")
         execution_status = execution.get("status") or "filled"
 
-        signal = self._signals.find_one({"order_id": order_id, "user_id": user_id}) if order_id else None
+        signal = self._signals.find_one(self._account_scoped_query({"order_id": order_id, "user_id": user_id})) if order_id else None
         if signal:
             for field in ("plan_id", "strategy_template_id", "source", "securities_account_id", "account_id", "broker"):
                 if signal.get(field) is not None:

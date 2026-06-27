@@ -4,6 +4,7 @@ import os
 import sys
 import time
 import logging
+from typing import Dict, List
 
 from bson import ObjectId
 from pymongo import MongoClient
@@ -25,6 +26,65 @@ def _env_default(name: str, value: str) -> str:
     return value
 
 
+def _single_account_spec() -> Dict[str, str]:
+    return {
+        "account_id": _env_default("TRADER_MINIQMT_ACCOUNT_ID", DEFAULT_ACCOUNT_ID),
+        "securities_account_id": _env_default("TRADER_SECURITIES_ACCOUNT_ID", DEFAULT_SECURITIES_ACCOUNT_ID),
+    }
+
+
+def _multi_account_specs() -> List[Dict[str, str]]:
+    """Parse optional multi-account simulation mapping.
+
+    Format: TRADER_SECURITIES_ACCOUNT_IDS=sec_id_1:account_id_1,sec_id_2:account_id_2
+    """
+
+    raw = os.getenv("TRADER_SECURITIES_ACCOUNT_IDS", "").strip()
+    if not raw:
+        return []
+
+    specs: List[Dict[str, str]] = []
+    for chunk in raw.split(","):
+        item = chunk.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError(
+                "TRADER_SECURITIES_ACCOUNT_IDS entries must use securities_account_id:account_id"
+            )
+        securities_account_id, account_id = [part.strip() for part in item.split(":", 1)]
+        if not securities_account_id or not account_id:
+            raise ValueError(
+                "TRADER_SECURITIES_ACCOUNT_IDS entries must include both securities_account_id and account_id"
+            )
+        specs.append({"securities_account_id": securities_account_id, "account_id": account_id})
+    return specs
+
+
+def _account_specs() -> List[Dict[str, str]]:
+    specs = _multi_account_specs()
+    return specs if specs else [_single_account_spec()]
+
+
+def _seed_account_doc(db, *, user_id: str, account_id: str, securities_account_id: str) -> None:
+    db.securities_accounts.update_one(
+        {"_id": ObjectId(securities_account_id), "user_id": user_id},
+        {
+            "$set": {
+                "is_simulated": True,
+                "updated_at": time.time(),
+            },
+            "$setOnInsert": {
+                "user_id": user_id,
+                "broker": os.getenv("QUANT_TRADER_SIM_BROKER_NAME", DEFAULT_BROKER),
+                "account_id": account_id,
+                "created_at": time.time(),
+            },
+        },
+        upsert=True,
+    )
+
+
 def _seed_simulated_account() -> None:
     if os.getenv("QUANT_TRADER_SEED_SIM_ACCOUNT", "1").strip().lower() not in {"1", "true", "yes", "on"}:
         return
@@ -32,28 +92,13 @@ def _seed_simulated_account() -> None:
     mongo_uri = _env_default("TRADER_MONGO_URI", "mongodb://quant-mongodb:27017/")
     mongo_db = _env_default("TRADER_MONGO_DB", os.getenv("MONGO_DB", "finance"))
     user_id = _env_default("TRADER_USER_ID", DEFAULT_USER_ID)
-    account_id = _env_default("TRADER_MINIQMT_ACCOUNT_ID", DEFAULT_ACCOUNT_ID)
-    securities_account_id = _env_default("TRADER_SECURITIES_ACCOUNT_ID", DEFAULT_SECURITIES_ACCOUNT_ID)
+    account_specs = _account_specs()
 
     client = MongoClient(mongo_uri)
     try:
         db = client[mongo_db]
-        db.securities_accounts.update_one(
-            {"_id": ObjectId(securities_account_id), "user_id": user_id},
-            {
-                "$set": {
-                    "is_simulated": True,
-                    "updated_at": time.time(),
-                },
-                "$setOnInsert": {
-                    "user_id": user_id,
-                    "broker": os.getenv("QUANT_TRADER_SIM_BROKER_NAME", DEFAULT_BROKER),
-                    "account_id": account_id,
-                    "created_at": time.time(),
-                },
-            },
-            upsert=True,
-        )
+        for account in account_specs:
+            _seed_account_doc(db, user_id=user_id, **account)
     finally:
         client.close()
 
@@ -65,28 +110,44 @@ def _restore_sim_engine_from_mongo() -> None:
     mongo_uri = _env_default("TRADER_MONGO_URI", "mongodb://quant-mongodb:27017/")
     mongo_db = _env_default("TRADER_MONGO_DB", os.getenv("MONGO_DB", "finance"))
     user_id = _env_default("TRADER_USER_ID", DEFAULT_USER_ID)
-    account_id = _env_default("TRADER_MINIQMT_ACCOUNT_ID", DEFAULT_ACCOUNT_ID)
-    securities_account_id = _env_default("TRADER_SECURITIES_ACCOUNT_ID", DEFAULT_SECURITIES_ACCOUNT_ID)
+    account_specs = _account_specs()
 
     client = MongoClient(mongo_uri)
     try:
-        from sim.matching_engine import default_engine
-        from sim.state_restore import restore_engine_from_mongo
+        from sim.matching_engine import default_engine, default_registry
+        from sim.state_restore import restore_engine_from_mongo, restore_registry_from_mongo
 
-        summary = restore_engine_from_mongo(
-            default_engine,
-            client[mongo_db],
-            user_id=user_id,
-            securities_account_id=securities_account_id,
-            account_id=account_id,
-        )
-        log.info(
-            "Restored simulated miniQMT state: positions=%s cash=%.2f next_order_id=%s account_id=%s",
-            summary["restored_positions"],
-            summary["cash"],
-            summary["next_order_id"],
-            summary["account_id"],
-        )
+        if _multi_account_specs():
+            summaries = restore_registry_from_mongo(
+                default_registry,
+                client[mongo_db],
+                user_id=user_id,
+                accounts=account_specs,
+            )
+            for summary in summaries.values():
+                log.info(
+                    "Restored simulated miniQMT state: positions=%s cash=%.2f next_order_id=%s account_id=%s",
+                    summary["restored_positions"],
+                    summary["cash"],
+                    summary["next_order_id"],
+                    summary["account_id"],
+                )
+        else:
+            summary = restore_engine_from_mongo(
+                default_engine,
+                client[mongo_db],
+                user_id=user_id,
+                securities_account_id=account_specs[0]["securities_account_id"],
+                account_id=account_specs[0]["account_id"],
+            )
+            default_registry.register(default_engine)
+            log.info(
+                "Restored simulated miniQMT state: positions=%s cash=%.2f next_order_id=%s account_id=%s",
+                summary["restored_positions"],
+                summary["cash"],
+                summary["next_order_id"],
+                summary["account_id"],
+            )
     except Exception as exc:  # noqa: BLE001
         log.warning("Failed to restore simulated miniQMT state from Mongo: %s", exc)
     finally:

@@ -22,7 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 from quant_trader.config import TraderConfig
 from quant_trader.mongo_trader_client import MongoTraderClient
 from quant_trader.trader_loop import TraderLoop
-from sim.matching_engine import default_engine
+from sim.matching_engine import default_engine, default_registry
 
 
 SIM_USER_ID = "sim-e2e-user"
@@ -55,7 +55,9 @@ def install_fake_xtquant(monkeypatch):
 
 @pytest.fixture
 def sim_engine():
+    default_registry.clear()
     default_engine.reset()
+    default_registry.register(default_engine)
     return default_engine
 
 

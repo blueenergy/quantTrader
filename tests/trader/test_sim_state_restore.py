@@ -10,8 +10,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from sim.matching_engine import MARKET_PEER_PRICE_FIRST, STOCK_BUY, SimMatchingEngine
-from sim.state_restore import restore_engine_from_mongo
+from sim.matching_engine import MARKET_PEER_PRICE_FIRST, STOCK_BUY, EngineRegistry, SimMatchingEngine
+from sim.state_restore import restore_engine_from_mongo, restore_registry_from_mongo
 
 
 def test_restore_state_is_idempotent_and_queries_snapshot():
@@ -119,3 +119,60 @@ def test_restore_engine_from_mongo_falls_back_without_snapshots():
     assert engine.next_order_id == 1_000_001
     assert engine.account_id == "DEFAULT"
     assert engine.query_positions() == []
+
+
+def test_restore_registry_from_mongo_loads_multiple_accounts_independently():
+    client = mongomock.MongoClient()
+    db = client["finance"]
+    db.trader_accounts.insert_many(
+        [
+            {
+                "user_id": "user-1",
+                "securities_account_id": "sec-1",
+                "account_id": "ACC-1",
+                "cash": 1000.0,
+                "synced_at": 10,
+            },
+            {
+                "user_id": "user-1",
+                "securities_account_id": "sec-2",
+                "account_id": "ACC-2",
+                "cash": 2000.0,
+                "synced_at": 10,
+            },
+        ]
+    )
+    db.trader_positions.insert_many(
+        [
+            {"user_id": "user-1", "securities_account_id": "sec-1", "symbol": "000001.SZ", "qty": 100},
+            {"user_id": "user-1", "securities_account_id": "sec-2", "symbol": "000001.SZ", "qty": 200},
+        ]
+    )
+    db.trade_signals.insert_one(
+        {"user_id": "user-1", "securities_account_id": "sec-1", "qmt_order_id": "1000100"}
+    )
+    db.trade_signals.insert_one(
+        {"user_id": "user-1", "securities_account_id": "sec-2", "qmt_order_id": "1000200"}
+    )
+    registry = EngineRegistry()
+
+    summaries = restore_registry_from_mongo(
+        registry,
+        db,
+        user_id="user-1",
+        accounts=[
+            {"securities_account_id": "sec-1", "account_id": "ACC-1"},
+            {"securities_account_id": "sec-2", "account_id": "ACC-2"},
+        ],
+    )
+
+    acc1 = registry.get("ACC-1")
+    acc2 = registry.get("ACC-2")
+    assert summaries["ACC-1"]["restored_positions"] == 1
+    assert summaries["ACC-2"]["restored_positions"] == 1
+    assert acc1.cash == 1000.0
+    assert acc2.cash == 2000.0
+    assert acc1.next_order_id == 1000101
+    assert acc2.next_order_id == 1000201
+    assert {pos.stock_code: pos.volume for pos in acc1.query_positions()} == {"000001.SZ": 100}
+    assert {pos.stock_code: pos.volume for pos in acc2.query_positions()} == {"000001.SZ": 200}

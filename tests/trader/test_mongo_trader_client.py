@@ -79,6 +79,7 @@ def test_get_pending_signals_sorts_sells_first(mock_mongo):
     signals.find.assert_called_once()
     q = signals.find.call_args[0][0]
     assert q["user_id"] == "user-1"
+    assert q["securities_account_id"] == "507f1f77bcf86cd799439011"
     assert q["is_executable"] is True
     assert q["mode"] == "live"
 
@@ -129,7 +130,12 @@ def test_are_plan_sells_terminal_blocks_on_in_flight_sell(mock_mongo):
 
     assert client.are_plan_sells_terminal("plan-1") is False
     query = signals.find.call_args[0][0]
-    assert query == {"user_id": "user-1", "plan_id": "plan-1", "mode": "live"}
+    assert query == {
+        "user_id": "user-1",
+        "plan_id": "plan-1",
+        "mode": "live",
+        "securities_account_id": "507f1f77bcf86cd799439011",
+    }
 
 
 @patch("quant_trader.mongo_trader_client.MongoClient")

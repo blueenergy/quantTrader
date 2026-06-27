@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 
 STOCK_BUY = 23
@@ -327,4 +327,38 @@ class SimMatchingEngine:
         )
 
 
+class EngineRegistry:
+    """Map miniQMT account ids to independent simulation engines."""
+
+    def __init__(self, *, initial_cash: float = 1_000_000.0) -> None:
+        self.initial_cash = float(initial_cash)
+        self._engines: Dict[str, SimMatchingEngine] = {}
+
+    def get(self, account_id: Optional[str]) -> SimMatchingEngine:
+        resolved_account_id = str(account_id or "SIM-ACC-0001")
+        engine = self._engines.get(resolved_account_id)
+        if engine is None:
+            engine = SimMatchingEngine(initial_cash=self.initial_cash, account_id=resolved_account_id)
+            self._engines[resolved_account_id] = engine
+        return engine
+
+    def register(self, engine: SimMatchingEngine) -> None:
+        self._engines[str(engine.account_id)] = engine
+
+    def has(self, account_id: str) -> bool:
+        return str(account_id) in self._engines
+
+    def account_ids(self) -> List[str]:
+        return sorted(self._engines)
+
+    def reset_all(self) -> None:
+        for engine in self._engines.values():
+            engine.reset()
+
+    def clear(self) -> None:
+        self._engines.clear()
+
+
 default_engine = SimMatchingEngine()
+default_registry = EngineRegistry()
+default_registry.register(default_engine)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional
 
 
 def restore_engine_from_mongo(
@@ -42,6 +42,34 @@ def restore_engine_from_mongo(
         "account_id": engine.account_id,
         "account_snapshot_found": account is not None,
     }
+
+
+def restore_registry_from_mongo(
+    registry: Any,
+    db: Any,
+    *,
+    user_id: str,
+    accounts: Iterable[Mapping[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Restore multiple fake miniQMT accounts into an engine registry."""
+
+    summaries: Dict[str, Dict[str, Any]] = {}
+    for account in accounts:
+        securities_account_id = str(account.get("securities_account_id") or "").strip()
+        account_id = str(account.get("account_id") or "").strip()
+        if not securities_account_id or not account_id:
+            continue
+
+        engine = registry.get(account_id)
+        summary = restore_engine_from_mongo(
+            engine,
+            db,
+            user_id=user_id,
+            securities_account_id=securities_account_id,
+            account_id=account_id,
+        )
+        summaries[account_id] = summary
+    return summaries
 
 
 def _latest_account_snapshot(db: Any, *, user_id: str, securities_account_id: str) -> Optional[Dict[str, Any]]:

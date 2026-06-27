@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 
-from sim.matching_engine import default_engine
+from sim.matching_engine import default_engine, default_registry
 
 
 def _auto_tick_enabled() -> bool:
@@ -16,7 +16,16 @@ class XtQuantTrader:
         self.started = False
         self.connected = False
         self.subscribed_account = None
+        self.registry = default_registry
         self.engine = default_engine
+
+    def _account_id(self, account) -> str:
+        return str(getattr(account, "account_id", default_engine.account_id))
+
+    def _engine_for(self, account):
+        engine = self.registry.get(self._account_id(account))
+        self.engine = engine
+        return engine
 
     def start(self):
         self.started = True
@@ -28,7 +37,7 @@ class XtQuantTrader:
 
     def subscribe(self, account):
         self.subscribed_account = account
-        self.engine.account_id = getattr(account, "account_id", self.engine.account_id)
+        self._engine_for(account)
         return 0
 
     def unsubscribe(self, account):
@@ -41,7 +50,7 @@ class XtQuantTrader:
         return 0
 
     def order_stock(self, account, stock_code, order_type, order_volume, price_type, price):
-        return self.engine.place_order(
+        return self._engine_for(account).place_order(
             stock_code=stock_code,
             order_type=order_type,
             order_volume=order_volume,
@@ -50,15 +59,16 @@ class XtQuantTrader:
         )
 
     def query_stock_orders(self, account):
+        engine = self._engine_for(account)
         if _auto_tick_enabled():
-            self.engine.tick()
-        return self.engine.query_orders()
+            engine.tick()
+        return engine.query_orders()
 
     def query_stock_positions(self, account):
-        return self.engine.query_positions()
+        return self._engine_for(account).query_positions()
 
     def query_stock_asset(self, account):
-        return self.engine.query_asset()
+        return self._engine_for(account).query_asset()
 
     def cancel_order_stock(self, account, order_id):
-        return self.engine.cancel_order(order_id)
+        return self._engine_for(account).cancel_order(order_id)
